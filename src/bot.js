@@ -11,7 +11,7 @@ function isAdmin(telegramId) {
   return !!(user && user.is_admin);
 }
 
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start/i, (msg) => {
   const chatId = msg.chat.id;
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(String(msg.from.id));
 
@@ -31,7 +31,7 @@ bot.onText(/\/start/, (msg) => {
   });
 });
 
-bot.onText(/\/admin/, (msg) => {
+bot.onText(/\/admin/i, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(msg.from.id)) {
     bot.sendMessage(chatId, 'Эта команда только для администраторов.');
@@ -46,7 +46,7 @@ bot.onText(/\/admin/, (msg) => {
   });
 });
 
-bot.onText(/\/myid/, (msg) => {
+bot.onText(/\/myid/i, (msg) => {
   bot.sendMessage(msg.chat.id, `Твой Telegram ID: ${msg.from.id}`);
 });
 

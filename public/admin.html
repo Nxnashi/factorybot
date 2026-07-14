@@ -98,6 +98,40 @@
 
   .export-form input[type="date"] { margin-bottom: 8px; }
   .state-screen { padding: 60px 24px; text-align: center; color: var(--hint); }
+
+  .stage-card .row1 { font-size: 15px; margin-bottom: 10px; }
+  .employee-block {
+    padding: 10px 0;
+    border-top: 1px solid var(--line);
+  }
+  .employee-block:first-of-type { border-top: none; }
+  .employee-name {
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .employee-time {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--hint);
+  }
+  .item-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 3px 0 3px 10px;
+    color: var(--text);
+  }
+  .item-line span:last-child { font-weight: 700; }
+  .item-line.total { padding-left: 0; }
+  .stage-total {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed var(--line);
+  }
 </style>
 </head>
 <body>
@@ -140,11 +174,13 @@ async function boot() {
 function render(stages) {
   app.innerHTML = `
     <div class="tabs">
-      <div class="tab active" data-tab="users">Сотрудники</div>
+      <div class="tab active" data-tab="shifts">Смены</div>
+      <div class="tab" data-tab="users">Сотрудники</div>
       <div class="tab" data-tab="nom">Номенклатура</div>
       <div class="tab" data-tab="export">Экспорт</div>
     </div>
-    <section class="active" id="tab-users"></section>
+    <section class="active" id="tab-shifts"></section>
+    <section id="tab-users"></section>
     <section id="tab-nom"></section>
     <section id="tab-export"></section>
   `;
@@ -158,9 +194,101 @@ function render(stages) {
     });
   });
 
+  renderShiftsTab(stages);
   renderUsersTab(stages);
   renderNomTab();
   renderExportTab();
+}
+
+// --- Смены (просмотр без экспорта) ---
+async function renderShiftsTab(stages) {
+  const el = document.getElementById('tab-shifts');
+  const today = new Date().toISOString().slice(0, 10);
+
+  el.innerHTML = `
+    <form class="inline export-form" id="shiftsFilterForm">
+      <label>С даты</label>
+      <input type="date" name="date_from" value="${today}" required>
+      <label>По дату</label>
+      <input type="date" name="date_to" value="${today}" required>
+      <button type="submit">Показать</button>
+    </form>
+    <div id="shiftsResult"></div>
+  `;
+
+  async function loadShifts(dateFrom, dateTo) {
+    const resultEl = document.getElementById('shiftsResult');
+    resultEl.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+    const rows = await (await fetch(`/api/admin/entries?date_from=${dateFrom}&date_to=${dateTo}`, { headers: authHeaders() })).json();
+
+    if (rows.length === 0) {
+      resultEl.innerHTML = `<div class="state-screen">Пока пусто — никто ничего не вносил за этот период</div>`;
+      return;
+    }
+
+    // Группировка: этап -> сотрудник -> [{nomenclature, grade, quantity}]
+    const byStage = {};
+    for (const r of rows) {
+      byStage[r.stage] = byStage[r.stage] || {};
+      byStage[r.stage][r.employee_name] = byStage[r.stage][r.employee_name] || [];
+      byStage[r.stage][r.employee_name].push(r);
+    }
+
+    const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', '3': 'Сорт 3', brak: 'Брак' };
+
+    const html = stages
+      .filter(s => byStage[s.code])
+      .map(stage => {
+        const employees = byStage[stage.code];
+
+        // Итого по этапу — суммируем по номенклатуре(+сорт)
+        const stageTotals = {};
+        Object.values(employees).flat().forEach(r => {
+          const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
+          stageTotals[key] = (stageTotals[key] || 0) + r.quantity;
+        });
+
+        const employeeBlocks = Object.entries(employees).map(([name, items]) => {
+          const perItem = {};
+          items.forEach(r => {
+            const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
+            perItem[key] = (perItem[key] || 0) + r.quantity;
+          });
+          const lastTime = items[items.length - 1].created_at.slice(11, 16);
+          return `
+            <div class="employee-block">
+              <div class="employee-name">${name} <span class="employee-time">посл. запись ${lastTime}</span></div>
+              ${Object.entries(perItem).map(([k, v]) => `
+                <div class="item-line"><span>${k}</span><span>${v}</span></div>
+              `).join('')}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="card stage-card">
+            <div class="row1">${stage.title}</div>
+            ${employeeBlocks}
+            <div class="stage-total">
+              <div class="row2" style="margin-bottom:4px;">Итого по этапу</div>
+              ${Object.entries(stageTotals).map(([k, v]) => `
+                <div class="item-line total"><span>${k}</span><span>${v}</span></div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+    resultEl.innerHTML = html || `<div class="state-screen">Пока пусто</div>`;
+  }
+
+  document.getElementById('shiftsFilterForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    loadShifts(fd.get('date_from'), fd.get('date_to'));
+  });
+
+  loadShifts(today, today);
 }
 
 // --- Сотрудники ---

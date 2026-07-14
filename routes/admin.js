@@ -47,6 +47,24 @@ router.delete('/users/:telegramId', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Просмотр смены (для дашборда, без экспорта) ---
+router.get('/entries', (req, res) => {
+  const { date_from, date_to } = req.query;
+  const from = date_from || new Date().toISOString().slice(0, 10);
+  const to = date_to || from;
+
+  const rows = db.prepare(`
+    SELECT e.id, e.entry_date, e.stage, e.telegram_id, e.employee_name,
+           n.name AS nomenclature_name, e.quantity, e.grade, e.comment, e.created_at
+    FROM entries e
+    JOIN nomenclature n ON n.id = e.nomenclature_id
+    WHERE e.entry_date BETWEEN ? AND ?
+    ORDER BY e.stage, e.employee_name, e.created_at
+  `).all(from, to);
+
+  res.json(rows);
+});
+
 // --- Номенклатура ---
 router.get('/nomenclature', (req, res) => {
   const rows = db.prepare('SELECT * FROM nomenclature ORDER BY sort_order, id').all();
