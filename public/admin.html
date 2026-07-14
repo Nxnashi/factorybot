@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Админка — учёт производства</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f4f2ee);
+    --surface: var(--tg-theme-secondary-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --accent: var(--tg-theme-button-color, #c4622d);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: #e2ddd4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  .tabs {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  .tab {
+    flex: 1;
+    padding: 14px 0;
+    text-align: center;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--hint);
+    border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: var(--text); border-color: var(--accent); }
+  section { display: none; padding: 16px; }
+  section.active { display: block; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .card .row1 { font-weight: 700; font-size: 14px; }
+  .card .row2 { font-size: 12px; color: var(--hint); margin-top: 2px; }
+  .card .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .card .actions button {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+  }
+  .card .actions button.danger { color: #b3372c; border-color: #b3372c; }
+
+  form.inline {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px;
+    margin-bottom: 16px;
+  }
+  form.inline label {
+    display: block;
+    font-size: 12px;
+    color: var(--hint);
+    margin: 8px 0 4px;
+  }
+  form.inline input, form.inline select {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  form.inline button {
+    margin-top: 12px;
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 700;
+  }
+
+  .export-form input[type="date"] { margin-bottom: 8px; }
+  .state-screen { padding: 60px 24px; text-align: center; color: var(--hint); }
+</style>
+</head>
+<body>
+
+<div id="app"><div class="state-screen">Загрузка…</div></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+
+function getTelegramId() {
+  const fromTg = tg?.initDataUnsafe?.user?.id;
+  if (fromTg) return String(fromTg);
+  const params = new URLSearchParams(location.search);
+  return params.get('tid');
+}
+
+const telegramId = getTelegramId();
+const app = document.getElementById('app');
+
+function authHeaders() {
+  return { 'Content-Type': 'application/json', 'x-telegram-id': telegramId };
+}
+
+async function boot() {
+  if (!telegramId) {
+    app.innerHTML = `<div class="state-screen">Не удалось определить пользователя.</div>`;
+    return;
+  }
+  const stagesRes = await fetch('/api/admin/stages', { headers: authHeaders() });
+  if (stagesRes.status === 403 || stagesRes.status === 401) {
+    app.innerHTML = `<div class="state-screen">Доступ только для администраторов.<br>Твой ID: <b>${telegramId}</b></div>`;
+    return;
+  }
+  const stages = await stagesRes.json();
+  render(stages);
+}
+
+function render(stages) {
+  app.innerHTML = `
+    <div class="tabs">
+      <div class="tab active" data-tab="users">Сотрудники</div>
+      <div class="tab" data-tab="nom">Номенклатура</div>
+      <div class="tab" data-tab="export">Экспорт</div>
+    </div>
+    <section class="active" id="tab-users"></section>
+    <section id="tab-nom"></section>
+    <section id="tab-export"></section>
+  `;
+
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    });
+  });
+
+  renderUsersTab(stages);
+  renderNomTab();
+  renderExportTab();
+}
+
+// --- Сотрудники ---
+async function renderUsersTab(stages) {
+  const el = document.getElementById('tab-users');
+  const users = await (await fetch('/api/admin/users', { headers: authHeaders() })).json();
+
+  el.innerHTML = `
+    <form class="inline" id="userForm">
+      <label>Telegram ID сотрудника</label>
+      <input name="telegram_id" required placeholder="Например 123456789">
+      <label>Имя</label>
+      <input name="full_name" required placeholder="Иван Иванов">
+      <label>Этап</label>
+      <select name="stage">
+        ${stages.map(s => `<option value="${s.code}">${s.title}</option>`).join('')}
+      </select>
+      <label><input type="checkbox" name="is_admin" style="width:auto;display:inline-block;margin-right:6px;">Администратор</label>
+      <button type="submit">Добавить / обновить</button>
+    </form>
+    <div id="usersList">
+      ${users.map(u => `
+        <div class="card">
+          <div class="row1">${u.full_name} ${u.is_admin ? '⭐' : ''}</div>
+          <div class="row2">ID: ${u.telegram_id} · ${stages.find(s => s.code === u.stage)?.title || u.stage}</div>
+          <div class="actions">
+            <button class="danger" data-del-user="${u.telegram_id}">Удалить</button>
+          </div>
+        </div>
+      `).join('') || '<div class="state-screen">Сотрудников пока нет</div>'}
+    </div>
+  `;
+
+  el.querySelector('#userForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await fetch('/api/admin/users', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        telegram_id: fd.get('telegram_id'),
+        full_name: fd.get('full_name'),
+        stage: fd.get('stage'),
+        is_admin: fd.get('is_admin') === 'on',
+      }),
+    });
+    renderUsersTab(stages);
+  });
+
+  el.querySelectorAll('[data-del-user]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/admin/users/${btn.dataset.delUser}`, { method: 'DELETE', headers: authHeaders() });
+      renderUsersTab(stages);
+    });
+  });
+}
+
+// --- Номенклатура ---
+async function renderNomTab() {
+  const el = document.getElementById('tab-nom');
+  const items = await (await fetch('/api/admin/nomenclature', { headers: authHeaders() })).json();
+
+  el.innerHTML = `
+    <form class="inline" id="nomForm">
+      <label>Название позиции</label>
+      <input name="name" required placeholder="Например: Бачок">
+      <label>Единица измерения</label>
+      <input name="unit" value="шт">
+      <button type="submit">Добавить позицию</button>
+    </form>
+    <div id="nomList">
+      ${items.map(n => `
+        <div class="card">
+          <div class="row1">${n.name} ${n.active ? '' : '(скрыто)'}</div>
+          <div class="row2">${n.unit}</div>
+          <div class="actions">
+            <button data-toggle-nom="${n.id}" data-active="${n.active}">${n.active ? 'Скрыть' : 'Показать'}</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  el.querySelector('#nomForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await fetch('/api/admin/nomenclature', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ name: fd.get('name'), unit: fd.get('unit') || 'шт' }),
+    });
+    renderNomTab();
+  });
+
+  el.querySelectorAll('[data-toggle-nom]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const active = btn.dataset.active === '1';
+      await fetch(`/api/admin/nomenclature/${btn.dataset.toggleNom}`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ active: !active }),
+      });
+      renderNomTab();
+    });
+  });
+}
+
+// --- Экспорт ---
+function renderExportTab() {
+  const el = document.getElementById('tab-export');
+  const today = new Date().toISOString().slice(0, 10);
+  el.innerHTML = `
+    <form class="inline export-form" id="exportForm">
+      <label>С даты</label>
+      <input type="date" name="date_from" value="${today}" required>
+      <label>По дату</label>
+      <input type="date" name="date_to" value="${today}" required>
+      <button type="submit">Скачать Excel</button>
+    </form>
+  `;
+  el.querySelector('#exportForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const url = `/api/export?date_from=${fd.get('date_from')}&date_to=${fd.get('date_to')}`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) { alert('Ошибка экспорта'); return; }
+    const blob = await res.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `otchet_${fd.get('date_from')}_${fd.get('date_to')}.xlsx`;
+    link.click();
+  });
+}
+
+boot();
+</script>
+</body>
+</html>

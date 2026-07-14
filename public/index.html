@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Учёт производства</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #f4f2ee);
+    --surface: var(--tg-theme-secondary-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #1c1c1e);
+    --hint: var(--tg-theme-hint-color, #8a8a8e);
+    --accent: var(--tg-theme-button-color, #c4622d);
+    --accent-text: var(--tg-theme-button-text-color, #ffffff);
+    --line: #e2ddd4;
+    --brak: #b3372c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    padding-bottom: 100px;
+  }
+  header {
+    padding: 18px 16px 14px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  header .eyebrow {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--hint);
+    margin-bottom: 4px;
+  }
+  header h1 {
+    font-size: 19px;
+    margin: 0 0 2px;
+    font-weight: 700;
+  }
+  header .who {
+    font-size: 13px;
+    color: var(--hint);
+  }
+  main { padding: 14px; }
+  .date-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+  }
+  .date-row label { font-size: 13px; color: var(--hint); }
+  .date-row input[type="date"] {
+    border: none;
+    background: transparent;
+    font-size: 15px;
+    color: var(--text);
+    font-weight: 600;
+    text-align: right;
+  }
+  .item-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 10px;
+  }
+  .item-card .name {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .item-card .name .unit {
+    font-size: 12px;
+    color: var(--hint);
+    font-weight: 400;
+  }
+  .qty-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .qty-row input[type="number"] {
+    flex: 1;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 16px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .grade-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .grade-cell label {
+    display: block;
+    font-size: 11px;
+    color: var(--hint);
+    margin-bottom: 4px;
+    text-align: center;
+  }
+  .grade-cell.brak label { color: var(--brak); }
+  .grade-cell input {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 4px;
+    font-size: 15px;
+    text-align: center;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .grade-cell.brak input { border-color: var(--brak); }
+
+  .submit-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, var(--bg) 60%, transparent);
+  }
+  .submit-btn {
+    width: 100%;
+    padding: 15px;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 16px;
+    font-weight: 700;
+  }
+  .submit-btn:disabled { opacity: 0.5; }
+
+  .today-log {
+    margin-top: 22px;
+  }
+  .today-log h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--hint);
+    margin-bottom: 8px;
+  }
+  .log-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .log-row .t { color: var(--hint); font-size: 12px; }
+
+  .state-screen {
+    padding: 60px 24px;
+    text-align: center;
+    color: var(--hint);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .state-screen b { color: var(--text); }
+  .toast {
+    position: fixed;
+    top: 14px; left: 14px; right: 14px;
+    background: var(--text);
+    color: var(--bg);
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 14px;
+    text-align: center;
+    transform: translateY(-80px);
+    transition: transform 0.25s ease;
+    z-index: 50;
+  }
+  .toast.show { transform: translateY(0); }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div class="state-screen">Загрузка…</div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready();
+tg?.expand();
+
+const API = '';
+const app = document.getElementById('app');
+const toastEl = document.getElementById('toast');
+
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  setTimeout(() => toastEl.classList.remove('show'), 2200);
+}
+
+function getTelegramId() {
+  const fromTg = tg?.initDataUnsafe?.user?.id;
+  if (fromTg) return String(fromTg);
+  // Фолбэк для теста вне Telegram — можно открыть index.html?tid=12345 в браузере
+  const params = new URLSearchParams(location.search);
+  return params.get('tid');
+}
+
+const GRADES = [
+  { code: '1', label: 'Сорт 1' },
+  { code: '2', label: 'Сорт 2' },
+  { code: '3', label: 'Сорт 3' },
+  { code: 'brak', label: 'Брак' },
+];
+
+async function init() {
+  const telegramId = getTelegramId();
+  if (!telegramId) {
+    app.innerHTML = `<div class="state-screen">Не удалось определить пользователя.<br>Открой приложение через кнопку в боте.</div>`;
+    return;
+  }
+
+  const meRes = await fetch(`${API}/api/me/${telegramId}`);
+  if (meRes.status === 404) {
+    app.innerHTML = `<div class="state-screen">
+      Ты ещё не зарегистрирован.<br><br>
+      Твой ID: <b>${telegramId}</b><br>
+      Передай его администратору для назначения этапа.
+    </div>`;
+    return;
+  }
+  const me = await meRes.json();
+
+  const nomRes = await fetch(`${API}/api/nomenclature`);
+  const nomenclature = await nomRes.json();
+
+  renderForm(me, nomenclature);
+  loadToday(telegramId);
+}
+
+function renderForm(me, nomenclature) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const itemsHtml = nomenclature.map(item => {
+    if (me.needs_grade) {
+      return `
+        <div class="item-card" data-id="${item.id}" data-grade="true">
+          <div class="name">${item.name} <span class="unit">${item.unit}</span></div>
+          <div class="grade-grid">
+            ${GRADES.map(g => `
+              <div class="grade-cell ${g.code === 'brak' ? 'brak' : ''}">
+                <label>${g.label}</label>
+                <input type="number" min="0" inputmode="numeric" data-grade-code="${g.code}" placeholder="0">
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="item-card" data-id="${item.id}" data-grade="false">
+        <div class="name">${item.name} <span class="unit">${item.unit}</span></div>
+        <div class="qty-row">
+          <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">${me.stage_title}</div>
+      <h1>Учёт производства</h1>
+      <div class="who">${me.full_name}</div>
+    </header>
+    <main>
+      <div class="date-row">
+        <label>Дата смены</label>
+        <input type="date" id="entryDate" value="${today}" max="${today}">
+      </div>
+      ${itemsHtml}
+      <div class="today-log" id="todayLog"></div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn" id="submitBtn">Отправить данные</button>
+    </div>
+  `;
+
+  document.getElementById('submitBtn').addEventListener('click', () => submit(me));
+}
+
+async function submit(me) {
+  const btn = document.getElementById('submitBtn');
+  const entryDate = document.getElementById('entryDate').value;
+  const cards = document.querySelectorAll('.item-card');
+  const items = [];
+
+  cards.forEach(card => {
+    const id = Number(card.dataset.id);
+    if (card.dataset.grade === 'true') {
+      card.querySelectorAll('[data-grade-code]').forEach(input => {
+        const qty = Number(input.value || 0);
+        if (qty > 0) {
+          items.push({ nomenclature_id: id, quantity: qty, grade: input.dataset.gradeCode });
+        }
+      });
+    } else {
+      const input = card.querySelector('[data-qty]');
+      const qty = Number(input.value || 0);
+      if (qty > 0) {
+        items.push({ nomenclature_id: id, quantity: qty });
+      }
+    }
+  });
+
+  if (items.length === 0) {
+    showToast('Заполни хотя бы одну позицию');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Отправка…';
+
+  try {
+    const res = await fetch(`${API}/api/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, items }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`Сохранено: ${data.saved} позиций`);
+      tg?.HapticFeedback?.notificationOccurred('success');
+      document.querySelectorAll('input[type="number"]').forEach(i => i.value = '');
+      loadToday(me.telegram_id);
+    } else {
+      showToast('Ошибка при сохранении');
+    }
+  } catch (e) {
+    showToast('Ошибка сети');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Отправить данные';
+  }
+}
+
+async function loadToday(telegramId) {
+  const res = await fetch(`${API}/api/today/${telegramId}`);
+  const rows = await res.json();
+  const el = document.getElementById('todayLog');
+  if (!el) return;
+  if (rows.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `
+    <h2>Внесено сегодня</h2>
+    ${rows.map(r => `
+      <div class="log-row">
+        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity}</span>
+        <span class="t">${r.created_at.slice(11, 16)}</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+init();
+</script>
+</body>
+</html>
