@@ -155,11 +155,21 @@
   .log-row {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     padding: 8px 0;
     border-bottom: 1px solid var(--line);
     font-size: 14px;
   }
   .log-row .t { color: var(--hint); font-size: 12px; }
+  .log-row .right { display: flex; align-items: center; gap: 10px; }
+  .log-row .del-btn {
+    border: none;
+    background: none;
+    color: var(--brak);
+    font-size: 18px;
+    line-height: 1;
+    padding: 4px 6px;
+  }
 
   .state-screen {
     padding: 60px 24px;
@@ -365,12 +375,34 @@ async function loadToday(telegramId) {
   el.innerHTML = `
     <h2>Внесено сегодня</h2>
     ${rows.map(r => `
-      <div class="log-row">
+      <div class="log-row" data-entry-id="${r.id}">
         <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity}</span>
-        <span class="t">${r.created_at.slice(11, 16)}</span>
+        <span class="right">
+          <span class="t">${r.created_at.slice(11, 16)}</span>
+          <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
+        </span>
       </div>
     `).join('')}
   `;
+
+  el.querySelectorAll('[data-del-entry]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Удалить эту запись?')) return;
+      try {
+        const res = await fetch(`${API}/api/entries/${btn.dataset.delEntry}?telegram_id=${telegramId}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('Запись удалена');
+          tg?.HapticFeedback?.notificationOccurred('success');
+          loadToday(telegramId);
+        } else {
+          showToast('Не удалось удалить');
+        }
+      } catch (e) {
+        showToast('Ошибка сети');
+      }
+    });
+  });
 }
 
 init();

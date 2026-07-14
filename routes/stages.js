@@ -77,6 +77,23 @@ router.post('/submit', (req, res) => {
   res.json({ ok: true, saved: rows.length });
 });
 
+// Удалить свою запись (только за сегодня — чтобы нельзя было редактировать закрытую историю)
+router.delete('/entries/:id', (req, res) => {
+  const { telegram_id } = req.query;
+  const { id } = req.params;
+  if (!telegram_id) return res.status(400).json({ error: 'bad_request' });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const entry = db.prepare('SELECT * FROM entries WHERE id = ?').get(id);
+
+  if (!entry) return res.status(404).json({ error: 'not_found' });
+  if (entry.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
+  if (entry.entry_date !== today) return res.status(403).json({ error: 'not_today' });
+
+  db.prepare('DELETE FROM entries WHERE id = ?').run(id);
+  res.json({ ok: true });
+});
+
 // История за сегодня для этого сотрудника (чтобы видел что уже вбил)
 router.get('/today/:telegramId', (req, res) => {
   const { telegramId } = req.params;

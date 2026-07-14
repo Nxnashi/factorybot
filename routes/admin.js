@@ -65,6 +65,13 @@ router.get('/entries', (req, res) => {
   res.json(rows);
 });
 
+// Удалить запись (админ может удалить любую, за любую дату — для исправления ошибок задним числом)
+router.delete('/entries/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM entries WHERE id = ?').run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'not_found' });
+  res.json({ ok: true });
+});
+
 // --- Номенклатура ---
 router.get('/nomenclature', (req, res) => {
   const rows = db.prepare('SELECT * FROM nomenclature ORDER BY sort_order, id').all();

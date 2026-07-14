@@ -121,12 +121,23 @@
   .item-line {
     display: flex;
     justify-content: space-between;
+    align-items: center;
     font-size: 13px;
     padding: 3px 0 3px 10px;
     color: var(--text);
   }
   .item-line span:last-child { font-weight: 700; }
   .item-line.total { padding-left: 0; }
+  .item-line .right { display: flex; align-items: center; gap: 8px; font-weight: 400; }
+  .item-line .entry-time { font-size: 11px; color: var(--hint); font-weight: 400; }
+  .item-line .del-btn {
+    border: none;
+    background: none;
+    color: #b3372c;
+    font-size: 16px;
+    line-height: 1;
+    padding: 2px 4px;
+  }
   .stage-total {
     margin-top: 8px;
     padding-top: 8px;
@@ -249,18 +260,20 @@ async function renderShiftsTab(stages) {
         });
 
         const employeeBlocks = Object.entries(employees).map(([name, items]) => {
-          const perItem = {};
-          items.forEach(r => {
-            const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
-            perItem[key] = (perItem[key] || 0) + r.quantity;
-          });
+          const rowsHtml = items.map(r => `
+            <div class="item-line" data-entry-id="${r.id}">
+              <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}</span>
+              <span class="right">
+                <span class="entry-time">${r.created_at.slice(11, 16)}</span>
+                <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
+              </span>
+            </div>
+          `).join('');
           const lastTime = items[items.length - 1].created_at.slice(11, 16);
           return `
             <div class="employee-block">
               <div class="employee-name">${name} <span class="employee-time">посл. запись ${lastTime}</span></div>
-              ${Object.entries(perItem).map(([k, v]) => `
-                <div class="item-line"><span>${k}</span><span>${v}</span></div>
-              `).join('')}
+              ${rowsHtml}
             </div>
           `;
         }).join('');
@@ -280,6 +293,14 @@ async function renderShiftsTab(stages) {
       }).join('');
 
     resultEl.innerHTML = html || `<div class="state-screen">Пока пусто</div>`;
+
+    resultEl.querySelectorAll('[data-del-entry]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Удалить эту запись?')) return;
+        await fetch(`/api/admin/entries/${btn.dataset.delEntry}`, { method: 'DELETE', headers: authHeaders() });
+        loadShifts(dateFrom, dateTo);
+      });
+    });
   }
 
   document.getElementById('shiftsFilterForm').addEventListener('submit', (e) => {
