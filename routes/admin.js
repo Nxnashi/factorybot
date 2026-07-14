@@ -26,19 +26,21 @@ router.get('/users', (req, res) => {
 });
 
 // Создать/обновить сотрудника (регистрация вручную операционистом по telegram_id)
+// stage может быть списком через запятую, например "molding,qc_final"
 router.post('/users', (req, res) => {
   const { telegram_id, full_name, stage, is_admin } = req.body;
   if (!telegram_id || !full_name || !stage) {
     return res.status(400).json({ error: 'bad_request' });
   }
-  if (!STAGES.find(s => s.code === stage)) {
+  const stageCodes = String(stage).split(',').map(s => s.trim()).filter(Boolean);
+  if (stageCodes.length === 0 || stageCodes.some(code => !STAGES.find(s => s.code === code))) {
     return res.status(400).json({ error: 'unknown_stage' });
   }
   db.prepare(`
     INSERT INTO users (telegram_id, full_name, stage, is_admin)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(telegram_id) DO UPDATE SET full_name = excluded.full_name, stage = excluded.stage, is_admin = excluded.is_admin
-  `).run(telegram_id, full_name, stage, is_admin ? 1 : 0);
+  `).run(telegram_id, full_name, stageCodes.join(','), is_admin ? 1 : 0);
   res.json({ ok: true });
 });
 

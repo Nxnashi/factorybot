@@ -44,6 +44,40 @@
   header .who {
     font-size: 13px;
     color: var(--hint);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .switch-stage-btn {
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--hint);
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 8px;
+  }
+  .picker-hint {
+    font-size: 13px;
+    color: var(--hint);
+    margin-bottom: 14px;
+  }
+  .stage-pick-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 10px;
+  }
+  .log-stage {
+    font-weight: 400;
+    color: var(--hint);
+    font-size: 12px;
   }
   main { padding: 14px; }
   .date-row {
@@ -232,6 +266,10 @@ const GRADES = [
   { code: 'brak', label: 'Брак' },
 ];
 
+let currentMe = null;
+let currentStage = null;
+let currentNomenclature = null;
+
 async function init() {
   const telegramId = getTelegramId();
   if (!telegramId) {
@@ -249,19 +287,54 @@ async function init() {
     return;
   }
   const me = await meRes.json();
+  currentMe = me;
+
+  if (!me.stages || me.stages.length === 0) {
+    app.innerHTML = `<div class="state-screen">Тебе пока не назначен ни один этап.<br>Обратись к администратору.</div>`;
+    return;
+  }
 
   const nomRes = await fetch(`${API}/api/nomenclature`);
-  const nomenclature = await nomRes.json();
+  currentNomenclature = await nomRes.json();
 
-  renderForm(me, nomenclature);
-  loadToday(telegramId);
+  if (me.stages.length === 1) {
+    currentStage = me.stages[0];
+    renderForm(me, currentStage, currentNomenclature);
+    loadToday(telegramId);
+  } else {
+    renderStagePicker(me);
+  }
 }
 
-function renderForm(me, nomenclature) {
+function renderStagePicker(me) {
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Выбор этапа</div>
+      <h1>Учёт производства</h1>
+      <div class="who">${me.full_name}</div>
+    </header>
+    <main>
+      <div class="picker-hint">За какой участок вносишь данные сейчас?</div>
+      ${me.stages.map(s => `
+        <button class="stage-pick-btn" data-stage-code="${s.code}">${s.title}</button>
+      `).join('')}
+    </main>
+  `;
+  app.querySelectorAll('[data-stage-code]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const stage = me.stages.find(s => s.code === btn.dataset.stageCode);
+      currentStage = stage;
+      renderForm(me, stage, currentNomenclature);
+      loadToday(me.telegram_id);
+    });
+  });
+}
+
+function renderForm(me, stage, nomenclature) {
   const today = new Date().toISOString().slice(0, 10);
 
   const itemsHtml = nomenclature.map(item => {
-    if (me.needs_grade) {
+    if (stage.needs_grade) {
       return `
         <div class="item-card" data-id="${item.id}" data-grade="true">
           <div class="name">${item.name} <span class="unit">${item.unit}</span></div>
@@ -286,11 +359,15 @@ function renderForm(me, nomenclature) {
     `;
   }).join('');
 
+  const switchLink = me.stages.length > 1
+    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
+    : '';
+
   app.innerHTML = `
     <header>
-      <div class="eyebrow">${me.stage_title}</div>
+      <div class="eyebrow">${stage.title}</div>
       <h1>Учёт производства</h1>
-      <div class="who">${me.full_name}</div>
+      <div class="who">${me.full_name} ${switchLink}</div>
     </header>
     <main>
       <div class="date-row">
@@ -305,10 +382,12 @@ function renderForm(me, nomenclature) {
     </div>
   `;
 
-  document.getElementById('submitBtn').addEventListener('click', () => submit(me));
+  document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage));
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 }
 
-async function submit(me) {
+async function submit(me, stage) {
   const btn = document.getElementById('submitBtn');
   const entryDate = document.getElementById('entryDate').value;
   const cards = document.querySelectorAll('.item-card');
@@ -344,7 +423,7 @@ async function submit(me) {
     const res = await fetch(`${API}/api/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, items }),
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, items }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -376,7 +455,7 @@ async function loadToday(telegramId) {
     <h2>Внесено сегодня</h2>
     ${rows.map(r => `
       <div class="log-row" data-entry-id="${r.id}">
-        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity}</span>
+        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title})</span></span>
         <span class="right">
           <span class="t">${r.created_at.slice(11, 16)}</span>
           <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>

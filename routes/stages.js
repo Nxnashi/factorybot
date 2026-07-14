@@ -7,21 +7,27 @@ function getStageMeta(code) {
   return STAGES.find(s => s.code === code);
 }
 
-// Кто я и какой у меня этап
+function parseStages(stageField) {
+  return String(stageField).split(',').map(s => s.trim()).filter(Boolean);
+}
+
+// Кто я и какие у меня этапы (может быть несколько)
 router.get('/me/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
   if (!user) {
     return res.status(404).json({ error: 'not_registered' });
   }
-  const stageMeta = getStageMeta(user.stage);
+  const stageCodes = parseStages(user.stage);
+  const stages = stageCodes.map(code => {
+    const meta = getStageMeta(code);
+    return { code, title: meta ? meta.title : code, needs_grade: meta ? meta.needsGrade : false };
+  });
   res.json({
     telegram_id: user.telegram_id,
     full_name: user.full_name,
     is_admin: !!user.is_admin,
-    stage: user.stage,
-    stage_title: stageMeta ? stageMeta.title : user.stage,
-    needs_grade: stageMeta ? stageMeta.needsGrade : false,
+    stages,
   });
 });
 
@@ -32,11 +38,11 @@ router.get('/nomenclature', (req, res) => {
 });
 
 // Отправка партии записей за один сабмит формы
-// body: { telegram_id, entry_date, items: [{ nomenclature_id, quantity, grade?, comment? }] }
+// body: { telegram_id, entry_date, stage, items: [{ nomenclature_id, quantity, grade?, comment? }] }
 router.post('/submit', (req, res) => {
-  const { telegram_id, entry_date, items } = req.body;
+  const { telegram_id, entry_date, stage, items } = req.body;
 
-  if (!telegram_id || !entry_date || !Array.isArray(items) || items.length === 0) {
+  if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'bad_request' });
   }
 
@@ -45,7 +51,12 @@ router.post('/submit', (req, res) => {
     return res.status(404).json({ error: 'not_registered' });
   }
 
-  const stageMeta = getStageMeta(user.stage);
+  const allowedStages = parseStages(user.stage);
+  if (!allowedStages.includes(stage)) {
+    return res.status(403).json({ error: 'stage_not_allowed' });
+  }
+
+  const stageMeta = getStageMeta(stage);
 
   const insert = db.prepare(`
     INSERT INTO entries (entry_date, stage, telegram_id, employee_name, nomenclature_id, quantity, grade, comment)
@@ -60,7 +71,7 @@ router.post('/submit', (req, res) => {
     .filter(it => Number(it.quantity) > 0)
     .map(it => ({
       entry_date,
-      stage: user.stage,
+      stage,
       telegram_id: user.telegram_id,
       employee_name: user.full_name,
       nomenclature_id: it.nomenclature_id,
@@ -99,13 +110,14 @@ router.get('/today/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   const today = new Date().toISOString().slice(0, 10);
   const rows = db.prepare(`
-    SELECT e.id, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
+    SELECT e.id, e.stage, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.telegram_id = ? AND e.entry_date = ?
     ORDER BY e.created_at DESC
   `).all(telegramId, today);
-  res.json(rows);
+  const withTitles = rows.map(r => ({ ...r, stage_title: (getStageMeta(r.stage) || {}).title || r.stage }));
+  res.json(withTitles);
 });
 
 module.exports = router;

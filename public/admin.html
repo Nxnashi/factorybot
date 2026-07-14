@@ -95,6 +95,24 @@
     color: var(--accent-text);
     font-weight: 700;
   }
+  .stage-checkboxes {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .stage-checkbox-item {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text);
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin: 0 !important;
+  }
+  .stage-checkbox-item input { width: auto !important; }
 
   .export-form input[type="date"] { margin-bottom: 8px; }
   .state-screen { padding: 60px 24px; text-align: center; color: var(--hint); }
@@ -323,36 +341,49 @@ async function renderUsersTab(stages) {
       <input name="telegram_id" required placeholder="Например 123456789">
       <label>Имя</label>
       <input name="full_name" required placeholder="Иван Иванов">
-      <label>Этап</label>
-      <select name="stage">
-        ${stages.map(s => `<option value="${s.code}">${s.title}</option>`).join('')}
-      </select>
+      <label>Этапы (можно выбрать несколько)</label>
+      <div class="stage-checkboxes">
+        ${stages.map(s => `
+          <label class="stage-checkbox-item">
+            <input type="checkbox" name="stage" value="${s.code}"> ${s.title}
+          </label>
+        `).join('')}
+      </div>
       <label><input type="checkbox" name="is_admin" style="width:auto;display:inline-block;margin-right:6px;">Администратор</label>
       <button type="submit">Добавить / обновить</button>
     </form>
     <div id="usersList">
-      ${users.map(u => `
+      ${users.map(u => {
+        const userStageCodes = u.stage.split(',').map(s => s.trim()).filter(Boolean);
+        const userStageTitles = userStageCodes.map(code => stages.find(s => s.code === code)?.title || code).join(', ');
+        return `
         <div class="card">
           <div class="row1">${u.full_name} ${u.is_admin ? '⭐' : ''}</div>
-          <div class="row2">ID: ${u.telegram_id} · ${stages.find(s => s.code === u.stage)?.title || u.stage}</div>
+          <div class="row2">ID: ${u.telegram_id} · ${userStageTitles}</div>
           <div class="actions">
             <button class="danger" data-del-user="${u.telegram_id}">Удалить</button>
           </div>
         </div>
-      `).join('') || '<div class="state-screen">Сотрудников пока нет</div>'}
+      `;
+      }).join('') || '<div class="state-screen">Сотрудников пока нет</div>'}
     </div>
   `;
 
   el.querySelector('#userForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
+    const selectedStages = fd.getAll('stage');
+    if (selectedStages.length === 0) {
+      alert('Выбери хотя бы один этап');
+      return;
+    }
     await fetch('/api/admin/users', {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify({
         telegram_id: fd.get('telegram_id'),
         full_name: fd.get('full_name'),
-        stage: fd.get('stage'),
+        stage: selectedStages.join(','),
         is_admin: fd.get('is_admin') === 'on',
       }),
     });
