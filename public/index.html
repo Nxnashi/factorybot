@@ -431,6 +431,8 @@ async function submit(me, stage) {
       tg?.HapticFeedback?.notificationOccurred('success');
       document.querySelectorAll('input[type="number"]').forEach(i => i.value = '');
       loadToday(me.telegram_id);
+    } else if (data.error === 'day_closed') {
+      showToast('Этот день уже закрыт. Обратись к администратору.');
     } else {
       showToast('Ошибка при сохранении');
     }

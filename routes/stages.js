@@ -51,6 +51,11 @@ router.post('/submit', (req, res) => {
     return res.status(404).json({ error: 'not_registered' });
   }
 
+  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
+  if (closedDay) {
+    return res.status(403).json({ error: 'day_closed' });
+  }
+
   const allowedStages = parseStages(user.stage);
   if (!allowedStages.includes(stage)) {
     return res.status(403).json({ error: 'stage_not_allowed' });
@@ -100,6 +105,9 @@ router.delete('/entries/:id', (req, res) => {
   if (!entry) return res.status(404).json({ error: 'not_found' });
   if (entry.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
   if (entry.entry_date !== today) return res.status(403).json({ error: 'not_today' });
+
+  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry.entry_date);
+  if (closedDay) return res.status(403).json({ error: 'day_closed' });
 
   db.prepare('DELETE FROM entries WHERE id = ?').run(id);
   res.json({ ok: true });

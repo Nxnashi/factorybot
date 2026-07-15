@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_entries_date_stage ON entries(entry_date, stage);
+
+CREATE TABLE IF NOT EXISTS closed_days (
+  entry_date TEXT PRIMARY KEY,
+  closed_by  TEXT NOT NULL,
+  closed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 // Миграция: если этап был удалён из STAGES (например "Приход ТМЦ"), но кому-то ещё назначен —

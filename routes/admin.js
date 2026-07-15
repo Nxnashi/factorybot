@@ -49,6 +49,39 @@ router.delete('/users/:telegramId', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Закрытие дня (после того как операционист перенёс данные в ИС) ---
+router.get('/day-status/:date', (req, res) => {
+  const row = db.prepare('SELECT * FROM closed_days WHERE entry_date = ?').get(req.params.date);
+  res.json(row ? { closed: true, closed_by: row.closed_by, closed_at: row.closed_at } : { closed: false });
+});
+
+router.post('/day-status/:date/close', (req, res) => {
+  const telegramId = req.header('x-telegram-id');
+  db.prepare(`
+    INSERT INTO closed_days (entry_date, closed_by) VALUES (?, ?)
+    ON CONFLICT(entry_date) DO UPDATE SET closed_by = excluded.closed_by, closed_at = datetime('now')
+  `).run(req.params.date, telegramId);
+  res.json({ ok: true });
+});
+
+router.post('/day-status/:date/reopen', (req, res) => {
+  db.prepare('DELETE FROM closed_days WHERE entry_date = ?').run(req.params.date);
+  res.json({ ok: true });
+});
+
+// Дни, за которые есть записи, но операционист их ещё не закрыл (чек-лист "не забыть выгрузить")
+router.get('/open-days', (req, res) => {
+  const rows = db.prepare(`
+    SELECT e.entry_date, COUNT(*) AS entries_count
+    FROM entries e
+    WHERE e.entry_date NOT IN (SELECT entry_date FROM closed_days)
+    GROUP BY e.entry_date
+    ORDER BY e.entry_date ASC
+    LIMIT 60
+  `).all();
+  res.json(rows);
+});
+
 // --- Просмотр смены (для дашборда, без экспорта) ---
 router.get('/entries', (req, res) => {
   const { date_from, date_to } = req.query;
