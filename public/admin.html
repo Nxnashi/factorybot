@@ -161,6 +161,34 @@
     padding-top: 8px;
     border-top: 1px dashed var(--line);
   }
+
+  .balance-card .row1 { margin-bottom: 8px; }
+  .balance-stage-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 4px 0;
+    border-top: 1px solid var(--line);
+  }
+  .balance-stage-line:first-of-type { border-top: none; }
+  .balance-stage-line span:last-child { font-weight: 700; }
+  .balance-deltas-block {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--line);
+  }
+  .balance-delta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    margin-bottom: 4px;
+  }
+  .balance-delta.ok { background: rgba(60, 160, 90, 0.12); color: #3ca05a; }
+  .balance-delta.warn { background: rgba(179, 55, 44, 0.12); color: #b3372c; }
+  .balance-delta.over { background: rgba(196, 98, 45, 0.12); color: var(--accent); }
+  .balance-delta span:last-child { font-weight: 700; }
 </style>
 </head>
 <body>
@@ -204,11 +232,13 @@ function render(stages) {
   app.innerHTML = `
     <div class="tabs">
       <div class="tab active" data-tab="shifts">Смены</div>
+      <div class="tab" data-tab="balance">Баланс</div>
       <div class="tab" data-tab="users">Сотрудники</div>
       <div class="tab" data-tab="nom">Номенклатура</div>
       <div class="tab" data-tab="export">Экспорт</div>
     </div>
     <section class="active" id="tab-shifts"></section>
+    <section id="tab-balance"></section>
     <section id="tab-users"></section>
     <section id="tab-nom"></section>
     <section id="tab-export"></section>
@@ -224,9 +254,79 @@ function render(stages) {
   });
 
   renderShiftsTab(stages);
+  renderBalanceTab(stages);
   renderUsersTab(stages);
   renderNomTab();
   renderExportTab();
+}
+
+// --- Баланс между этапами ---
+async function renderBalanceTab(stages) {
+  const el = document.getElementById('tab-balance');
+  const today = new Date().toISOString().slice(0, 10);
+
+  el.innerHTML = `
+    <form class="inline export-form" id="balanceFilterForm">
+      <label>С даты</label>
+      <input type="date" name="date_from" value="${today}" required>
+      <label>По дату</label>
+      <input type="date" name="date_to" value="${today}" required>
+      <button type="submit">Показать</button>
+    </form>
+    <div id="balanceResult"></div>
+  `;
+
+  const GRADE_LABELS = { '1': 'с1', '2': 'с2', '3': 'с3', brak: 'брак' };
+
+  async function loadBalance(dateFrom, dateTo) {
+    const resultEl = document.getElementById('balanceResult');
+    resultEl.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+    const data = await (await fetch(`/api/admin/balance?date_from=${dateFrom}&date_to=${dateTo}`, { headers: authHeaders() })).json();
+
+    if (data.length === 0) {
+      resultEl.innerHTML = `<div class="state-screen">Нет данных за этот период</div>`;
+      return;
+    }
+
+    resultEl.innerHTML = data.map(nom => {
+      const stagesRow = nom.per_stage
+        .filter(s => s.total > 0)
+        .map(s => {
+          const gradesStr = s.grades
+            ? ' (' + Object.entries(s.grades).map(([g, q]) => `${GRADE_LABELS[g] || g}: ${q}`).join(', ') + ')'
+            : '';
+          return `<div class="balance-stage-line"><span>${s.title}</span><span>${s.total}${gradesStr}</span></div>`;
+        }).join('');
+
+      const deltasRow = nom.deltas.map(d => {
+        const fromTitle = stages.find(s => s.code === d.from_stage)?.title || d.from_stage;
+        const toTitle = stages.find(s => s.code === d.to_stage)?.title || d.to_stage;
+        const cls = d.delta === 0 ? 'ok' : (d.delta > 0 ? 'warn' : 'over');
+        return `
+          <div class="balance-delta ${cls}">
+            <span>${fromTitle} → ${toTitle}</span>
+            <span>${d.delta === 0 ? 'сходится' : (d.delta > 0 ? 'не хватает ' + d.delta : 'лишнее ' + Math.abs(d.delta))}</span>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="card balance-card">
+          <div class="row1">${nom.nomenclature_name}</div>
+          ${stagesRow}
+          ${deltasRow ? `<div class="balance-deltas-block">${deltasRow}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  }
+
+  document.getElementById('balanceFilterForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    loadBalance(fd.get('date_from'), fd.get('date_to'));
+  });
+
+  loadBalance(today, today);
 }
 
 // --- Смены (просмотр без экспорта) ---

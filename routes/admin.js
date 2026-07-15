@@ -74,6 +74,78 @@ router.delete('/entries/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Баланс по этапам (сколько зашло/вышло на каждом этапе, где расхождения) ---
+router.get('/balance', (req, res) => {
+  const { date_from, date_to } = req.query;
+  const from = date_from || new Date().toISOString().slice(0, 10);
+  const to = date_to || from;
+
+  const rows = db.prepare(`
+    SELECT n.id AS nomenclature_id, n.name AS nomenclature_name,
+           e.stage, e.grade, SUM(e.quantity) AS total
+    FROM entries e
+    JOIN nomenclature n ON n.id = e.nomenclature_id
+    WHERE e.entry_date BETWEEN ? AND ?
+    GROUP BY n.id, e.stage, e.grade
+  `).all(from, to);
+
+  // Собираем в структуру: nomenclature_id -> { stage -> total, stage_grades -> {grade: total} }
+  const byNom = {};
+  for (const r of rows) {
+    if (!byNom[r.nomenclature_id]) {
+      byNom[r.nomenclature_id] = { nomenclature_name: r.nomenclature_name, stageTotals: {}, stageGrades: {} };
+    }
+    const entry = byNom[r.nomenclature_id];
+    entry.stageTotals[r.stage] = (entry.stageTotals[r.stage] || 0) + r.total;
+    if (r.grade) {
+      entry.stageGrades[r.stage] = entry.stageGrades[r.stage] || {};
+      entry.stageGrades[r.stage][r.grade] = (entry.stageGrades[r.stage][r.grade] || 0) + r.total;
+    }
+  }
+
+  // Замес меряется сырьём (кг/партии), а не штуками готовых изделий — сравнивать напрямую
+  // с формовкой некорректно, поэтому в цепочку сверки берём только этапы поштучного учёта
+  const BALANCE_CHAIN = ['molding', 'qc_molding', 'kiln', 'qc_final'];
+
+  const stageCodes = STAGES.map(s => s.code);
+  const result = Object.entries(byNom).map(([nomenclatureId, data]) => {
+    const perStage = stageCodes.map(code => ({
+      code,
+      title: STAGES.find(s => s.code === code).title,
+      total: data.stageTotals[code] || 0,
+      grades: data.stageGrades[code] || null,
+    }));
+
+    // "Годные" на QC-этапах = всё кроме брака — нужно для сверки с соседними этапами
+    const goodAt = (code) => {
+      const grades = data.stageGrades[code];
+      if (!grades) return data.stageTotals[code] || 0;
+      return Object.entries(grades).reduce((sum, [g, q]) => sum + (g === 'brak' ? 0 : q), 0);
+    };
+
+    // Расхождения только по цепочке поштучного учёта (без замеса)
+    const deltas = [];
+    for (let i = 0; i < BALANCE_CHAIN.length - 1; i++) {
+      const fromCode = BALANCE_CHAIN[i];
+      const toCode = BALANCE_CHAIN[i + 1];
+      const fromQty = goodAt(fromCode);
+      const toQty = data.stageTotals[toCode] || 0;
+      if ((data.stageTotals[fromCode] || 0) === 0 && toQty === 0) continue;
+      deltas.push({
+        from_stage: fromCode,
+        to_stage: toCode,
+        from_qty: fromQty,
+        to_qty: toQty,
+        delta: fromQty - toQty,
+      });
+    }
+
+    return { nomenclature_id: Number(nomenclatureId), nomenclature_name: data.nomenclature_name, per_stage: perStage, deltas };
+  });
+
+  res.json(result);
+});
+
 // --- Номенклатура ---
 router.get('/nomenclature', (req, res) => {
   const rows = db.prepare('SELECT * FROM nomenclature ORDER BY sort_order, id').all();

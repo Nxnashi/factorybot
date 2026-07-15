@@ -46,6 +46,30 @@ bot.onText(/\/admin/i, (msg) => {
   });
 });
 
+bot.onText(/\/report/i, async (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(msg.from.id)) {
+    bot.sendMessage(chatId, 'Эта команда только для администраторов.');
+    return;
+  }
+  const { buildReportWorkbook, reportFilename } = require('./reportGenerator');
+  const today = new Date().toISOString().slice(0, 10);
+  const hasEntries = db.prepare('SELECT COUNT(*) AS c FROM entries WHERE entry_date = ?').get(today).c;
+  if (hasEntries === 0) {
+    bot.sendMessage(chatId, `За ${today} пока нет ни одной записи.`);
+    return;
+  }
+  bot.sendMessage(chatId, 'Формирую отчёт…');
+  const workbook = await buildReportWorkbook(today, today);
+  const buffer = await workbook.xlsx.writeBuffer();
+  await bot.sendDocument(
+    chatId,
+    Buffer.from(buffer),
+    { caption: `Отчёт по производству за ${today}` },
+    { filename: reportFilename(today, today), contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+  );
+});
+
 bot.onText(/\/myid/i, (msg) => {
   bot.sendMessage(msg.chat.id, `Твой Telegram ID: ${msg.from.id}`);
 });
