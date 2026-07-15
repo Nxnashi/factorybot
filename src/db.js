@@ -6,7 +6,6 @@ db.pragma('journal_mode = WAL');
 
 // Этапы производства (фиксированный список, порядок важен для отчёта)
 const STAGES = [
-  { code: 'intake', title: 'Приход ТМЦ', needsGrade: false },
   { code: 'mixing', title: 'Зона замеса', needsGrade: false },
   { code: 'molding', title: 'Формовка', needsGrade: false },
   { code: 'qc_molding', title: 'QC после формовки', needsGrade: true },
@@ -47,6 +46,20 @@ CREATE TABLE IF NOT EXISTS entries (
 
 CREATE INDEX IF NOT EXISTS idx_entries_date_stage ON entries(entry_date, stage);
 `);
+
+// Миграция: если этап был удалён из STAGES (например "Приход ТМЦ"), но кому-то ещё назначен —
+// убираем его из списка этапов пользователя, чтобы не остаться с несуществующим этапом
+const validCodes = new Set(STAGES.map(s => s.code));
+const allUsers = db.prepare('SELECT telegram_id, stage FROM users').all();
+const fixStage = db.prepare('UPDATE users SET stage = ? WHERE telegram_id = ?');
+for (const u of allUsers) {
+  const codes = String(u.stage).split(',').map(s => s.trim()).filter(Boolean);
+  const cleaned = codes.filter(c => validCodes.has(c));
+  const finalCodes = cleaned.length > 0 ? cleaned : [STAGES[0].code];
+  if (finalCodes.join(',') !== u.stage) {
+    fixStage.run(finalCodes.join(','), u.telegram_id);
+  }
+}
 
 // Бутстрап первого администратора из переменной окружения (один раз, если его ещё нет)
 if (process.env.ADMIN_TELEGRAM_ID) {
