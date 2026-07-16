@@ -49,6 +49,34 @@ async function buildReportWorkbook(from, to) {
 
   for (const stage of STAGES) {
     const sheet = workbook.addWorksheet(stage.title.slice(0, 31));
+
+    if (stage.formType === 'photo') {
+      sheet.columns = [
+        { header: 'Дата', key: 'entry_date', width: 12 },
+        { header: 'Сотрудник', key: 'employee_name', width: 22 },
+        { header: 'Комментарий', key: 'caption', width: 35 },
+        { header: 'Время', key: 'created_at', width: 18 },
+      ];
+      sheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
+
+      const photoRows = db.prepare(`
+        SELECT entry_date, employee_name, caption, created_at
+        FROM intake_photos
+        WHERE entry_date BETWEEN ? AND ?
+        ORDER BY entry_date, created_at
+      `).all(from, to);
+
+      photoRows.forEach(r => {
+        sheet.addRow({
+          entry_date: r.entry_date,
+          employee_name: r.employee_name,
+          caption: r.caption || '',
+          created_at: r.created_at,
+        });
+      });
+      continue;
+    }
+
     sheet.columns = [
       { header: 'Дата', key: 'entry_date', width: 12 },
       { header: 'Сотрудник', key: 'employee_name', width: 22 },

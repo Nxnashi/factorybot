@@ -21,7 +21,9 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Factory tracker running on port ${PORT}`));
 
-// Бот запускаем в этом же процессе, если задан токен
+// Бот и планировщик отчётов запускаем в этом же процессе, если задан токен
 if (process.env.BOT_TOKEN) {
-  require('./src/bot');
+  const bot = require('./src/bot');
+  const { startScheduler } = require('./src/scheduler');
+  startScheduler(bot);
 }

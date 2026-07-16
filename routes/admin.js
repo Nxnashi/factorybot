@@ -90,14 +90,34 @@ router.get('/entries', (req, res) => {
 
   const rows = db.prepare(`
     SELECT e.id, e.entry_date, e.stage, e.telegram_id, e.employee_name,
-           n.name AS nomenclature_name, e.quantity, e.grade, e.comment, e.created_at
+           n.name AS nomenclature_name, e.quantity, e.grade, e.comment, e.created_at, 0 AS is_photo
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.entry_date BETWEEN ? AND ?
     ORDER BY e.stage, e.employee_name, e.created_at
   `).all(from, to);
 
-  res.json(rows);
+  // Фото накладных (этап "Приход ТМЦ") показываем в той же ленте, но без номенклатуры/количества
+  const photoRows = db.prepare(`
+    SELECT id, entry_date, telegram_id, employee_name, caption, created_at
+    FROM intake_photos
+    WHERE entry_date BETWEEN ? AND ?
+    ORDER BY employee_name, created_at
+  `).all(from, to).map(p => ({
+    id: p.id,
+    entry_date: p.entry_date,
+    stage: 'intake',
+    telegram_id: p.telegram_id,
+    employee_name: p.employee_name,
+    nomenclature_name: null,
+    quantity: null,
+    grade: null,
+    comment: p.caption,
+    created_at: p.created_at,
+    is_photo: 1,
+  }));
+
+  res.json([...rows, ...photoRows]);
 });
 
 // Удалить запись (админ может удалить любую, за любую дату — для исправления ошибок задним числом)
@@ -138,7 +158,7 @@ router.get('/balance', (req, res) => {
 
   // Замес меряется сырьём (кг/партии), а не штуками готовых изделий — сравнивать напрямую
   // с формовкой некорректно, поэтому в цепочку сверки берём только этапы поштучного учёта
-  const BALANCE_CHAIN = ['molding', 'qc_molding', 'kiln', 'qc_final'];
+  const BALANCE_CHAIN = ['molding', 'qc_molding', 'glazing', 'kiln', 'qc_final'];
 
   const stageCodes = STAGES.map(s => s.code);
   const result = Object.entries(byNom).map(([nomenclatureId, data]) => {

@@ -25,7 +25,8 @@ async function sendDailyReport(bot) {
   }
 
   const hasEntries = db.prepare('SELECT COUNT(*) AS c FROM entries WHERE entry_date = ?').get(today).c;
-  if (hasEntries === 0) {
+  const hasPhotos = db.prepare('SELECT COUNT(*) AS c FROM intake_photos WHERE entry_date = ?').get(today).c;
+  if (hasEntries === 0 && hasPhotos === 0) {
     console.log(`Автоотправка: за ${today} нет ни одной записи, отчёт не отправляется`);
     return;
   }
@@ -64,8 +65,15 @@ async function checkAndSendReminders(bot) {
     const submittedStages = db.prepare(
       'SELECT DISTINCT stage FROM entries WHERE telegram_id = ? AND entry_date = ?'
     ).all(worker.telegram_id, today).map(r => r.stage);
+    const hasPhotoToday = db.prepare(
+      'SELECT 1 FROM intake_photos WHERE telegram_id = ? AND entry_date = ? LIMIT 1'
+    ).get(worker.telegram_id, today);
 
-    const missingCodes = assignedStages.filter(code => !submittedStages.includes(code));
+    const missingCodes = assignedStages.filter(code => {
+      const meta = getStageMeta(code);
+      if (meta && meta.formType === 'photo') return !hasPhotoToday;
+      return !submittedStages.includes(code);
+    });
     if (missingCodes.length === 0) continue;
 
     const missingTitles = missingCodes.map(code => (getStageMeta(code) || {}).title || code);

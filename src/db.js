@@ -5,12 +5,15 @@ const db = new Database(path.join(__dirname, '..', 'factory.db'));
 db.pragma('journal_mode = WAL');
 
 // Этапы производства (фиксированный список, порядок важен для отчёта)
+// formType: 'quantity' — обычная форма номенклатура+количество, 'photo' — фото документа
 const STAGES = [
-  { code: 'mixing', title: 'Зона замеса', needsGrade: false },
-  { code: 'molding', title: 'Формовка', needsGrade: false },
-  { code: 'qc_molding', title: 'QC после формовки', needsGrade: true },
-  { code: 'kiln', title: 'Загрузка в печь', needsGrade: false },
-  { code: 'qc_final', title: 'Учёт готовой продукции (финальный QC)', needsGrade: true },
+  { code: 'intake', title: 'Приход ТМЦ', needsGrade: false, formType: 'photo' },
+  { code: 'mixing', title: 'Зона замеса', needsGrade: false, formType: 'quantity' },
+  { code: 'molding', title: 'Формовка', needsGrade: false, formType: 'quantity' },
+  { code: 'qc_molding', title: 'QC после шлифовки', needsGrade: true, formType: 'quantity' },
+  { code: 'glazing', title: 'Глазирование', needsGrade: false, formType: 'quantity' },
+  { code: 'kiln', title: 'Загрузка в печь', needsGrade: false, formType: 'quantity' },
+  { code: 'qc_final', title: 'Учёт готовой продукции (финальный QC)', needsGrade: true, formType: 'quantity' },
 ];
 
 db.exec(`
@@ -50,6 +53,15 @@ CREATE TABLE IF NOT EXISTS closed_days (
   entry_date TEXT PRIMARY KEY,
   closed_by  TEXT NOT NULL,
   closed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS intake_photos (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date    TEXT NOT NULL,
+  telegram_id   TEXT NOT NULL,
+  employee_name TEXT NOT NULL,
+  caption       TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
 

@@ -79,6 +79,43 @@
     color: var(--hint);
     font-size: 12px;
   }
+
+  .photo-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .photo-upload-btn {
+    display: block;
+    text-align: center;
+    padding: 24px 12px;
+    border: 2px dashed var(--line);
+    border-radius: 12px;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 15px;
+    cursor: pointer;
+    margin-bottom: 12px;
+  }
+  #photoPreview {
+    display: block;
+    width: 100%;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    max-height: 320px;
+    object-fit: cover;
+  }
+  .photo-caption-input {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 14px;
+    background: var(--bg);
+    color: var(--text);
+  }
   main { padding: 14px; }
   .date-row {
     display: flex;
@@ -299,8 +336,12 @@ async function init() {
 
   if (me.stages.length === 1) {
     currentStage = me.stages[0];
-    renderForm(me, currentStage, currentNomenclature);
-    loadToday(telegramId);
+    if (currentStage.form_type === 'photo') {
+      renderPhotoForm(me, currentStage);
+    } else {
+      renderForm(me, currentStage, currentNomenclature);
+      loadToday(telegramId);
+    }
   } else {
     renderStagePicker(me);
   }
@@ -324,10 +365,123 @@ function renderStagePicker(me) {
     btn.addEventListener('click', () => {
       const stage = me.stages.find(s => s.code === btn.dataset.stageCode);
       currentStage = stage;
-      renderForm(me, stage, currentNomenclature);
-      loadToday(me.telegram_id);
+      if (stage.form_type === 'photo') {
+        renderPhotoForm(me, stage);
+      } else {
+        renderForm(me, stage, currentNomenclature);
+        loadToday(me.telegram_id);
+      }
     });
   });
+}
+
+function renderPhotoForm(me, stage) {
+  const today = new Date().toISOString().slice(0, 10);
+  const switchLink = me.stages.length > 1
+    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
+    : '';
+
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">${stage.title}</div>
+      <h1>Учёт производства</h1>
+      <div class="who">${me.full_name} ${switchLink}</div>
+    </header>
+    <main>
+      <div class="date-row">
+        <label>Дата</label>
+        <input type="date" id="entryDate" value="${today}" max="${today}">
+      </div>
+      <div class="photo-card">
+        <label class="photo-upload-btn" id="photoUploadLabel">
+          <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none;">
+          <span id="photoUploadText">📷 Сфотографировать накладную</span>
+        </label>
+        <img id="photoPreview" style="display:none;">
+        <input type="text" id="photoCaption" placeholder="Комментарий (поставщик, № накладной) — необязательно" class="photo-caption-input">
+      </div>
+      <div class="today-log" id="todayPhotosLog"></div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn" id="photoSubmitBtn" disabled>Отправить фото</button>
+    </div>
+  `;
+
+  const photoInput = document.getElementById('photoInput');
+  const preview = document.getElementById('photoPreview');
+  const submitBtn = document.getElementById('photoSubmitBtn');
+  let selectedFile = null;
+
+  photoInput.addEventListener('change', () => {
+    const file = photoInput.files[0];
+    if (!file) return;
+    selectedFile = file;
+    preview.src = URL.createObjectURL(file);
+    preview.style.display = 'block';
+    document.getElementById('photoUploadText').textContent = '📷 Заменить фото';
+    submitBtn.disabled = false;
+  });
+
+  submitBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Отправка…';
+
+    const fd = new FormData();
+    fd.append('telegram_id', me.telegram_id);
+    fd.append('entry_date', document.getElementById('entryDate').value);
+    fd.append('caption', document.getElementById('photoCaption').value);
+    fd.append('photo', selectedFile);
+
+    try {
+      const res = await fetch(`${API}/api/intake-photo`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Фото отправлено');
+        tg?.HapticFeedback?.notificationOccurred('success');
+        selectedFile = null;
+        photoInput.value = '';
+        preview.style.display = 'none';
+        document.getElementById('photoCaption').value = '';
+        document.getElementById('photoUploadText').textContent = '📷 Сфотографировать накладную';
+        loadTodayPhotos(me.telegram_id);
+      } else if (data.error === 'day_closed') {
+        showToast('Этот день уже закрыт. Обратись к администратору.');
+      } else {
+        showToast('Ошибка при отправке');
+      }
+    } catch (e) {
+      showToast('Ошибка сети');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Отправить фото';
+    }
+  });
+
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+
+  loadTodayPhotos(me.telegram_id);
+}
+
+async function loadTodayPhotos(telegramId) {
+  const res = await fetch(`${API}/api/today-photos/${telegramId}`);
+  const rows = await res.json();
+  const el = document.getElementById('todayPhotosLog');
+  if (!el) return;
+  if (rows.length === 0) {
+    el.innerHTML = '';
+    return;
+  }
+  el.innerHTML = `
+    <h2>Отправлено сегодня (${rows.length})</h2>
+    ${rows.map(r => `
+      <div class="log-row">
+        <span>📷 ${r.caption || 'Накладная'}</span>
+        <span class="t">${r.created_at.slice(11, 16)}</span>
+      </div>
+    `).join('')}
+  `;
 }
 
 function renderForm(me, stage, nomenclature) {

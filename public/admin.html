@@ -190,6 +190,72 @@
   .balance-delta.over { background: rgba(196, 98, 45, 0.12); color: var(--accent); }
   .balance-delta span:last-child { font-weight: 700; }
 
+  .balance-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    margin-bottom: 10px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .balance-table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 640px;
+    font-size: 12px;
+  }
+  .balance-table th, .balance-table td {
+    padding: 9px 10px;
+    text-align: center;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+  }
+  .balance-table th:last-child, .balance-table td:last-child { border-right: none; }
+  .balance-table thead th {
+    background: #EFEAE0;
+    font-weight: 700;
+    font-size: 11px;
+    color: var(--hint);
+    white-space: normal;
+    max-width: 90px;
+  }
+  .balance-table .row-label {
+    text-align: left;
+    font-weight: 700;
+    white-space: normal;
+    position: sticky;
+    left: 0;
+    background: var(--surface);
+    z-index: 1;
+  }
+  .balance-table thead th:first-child {
+    text-align: left;
+    position: sticky;
+    left: 0;
+    z-index: 2;
+  }
+  .balance-table tr.row-total td {
+    font-weight: 700;
+    background: #EFEAE0;
+    border-top: 2px solid var(--line);
+  }
+  .balance-table td.cell-warn { background: rgba(179, 55, 44, 0.15); color: #b3372c; font-weight: 700; }
+  .balance-table td.cell-over { background: rgba(196, 98, 45, 0.15); color: var(--accent); font-weight: 700; }
+
+  .balance-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--hint);
+    margin-bottom: 10px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .legend-swatch.warn { background: rgba(179, 55, 44, 0.4); }
+  .legend-swatch.over { background: rgba(196, 98, 45, 0.4); }
+
   .day-status-bar {
     display: flex;
     justify-content: space-between;
@@ -304,7 +370,8 @@ async function renderBalanceTab(stages) {
     <div id="balanceResult"></div>
   `;
 
-  const GRADE_LABELS = { '1': 'с1', '2': 'с2', '3': 'с3', brak: 'брак' };
+  // Приход ТМЦ — фото, в количественный баланс не входит
+  const stageCols = stages.filter(s => s.formType !== 'photo');
 
   async function loadBalance(dateFrom, dateTo) {
     const resultEl = document.getElementById('balanceResult');
@@ -316,36 +383,54 @@ async function renderBalanceTab(stages) {
       return;
     }
 
-    resultEl.innerHTML = data.map(nom => {
-      const stagesRow = nom.per_stage
-        .filter(s => s.total > 0)
-        .map(s => {
-          const gradesStr = s.grades
-            ? ' (' + Object.entries(s.grades).map(([g, q]) => `${GRADE_LABELS[g] || g}: ${q}`).join(', ') + ')'
-            : '';
-          return `<div class="balance-stage-line"><span>${s.title}</span><span>${s.total}${gradesStr}</span></div>`;
-        }).join('');
+    const rowsHtml = data.map(nom => {
+      const deltaByToStage = {};
+      nom.deltas.forEach(d => { deltaByToStage[d.to_stage] = d; });
 
-      const deltasRow = nom.deltas.map(d => {
-        const fromTitle = stages.find(s => s.code === d.from_stage)?.title || d.from_stage;
-        const toTitle = stages.find(s => s.code === d.to_stage)?.title || d.to_stage;
-        const cls = d.delta === 0 ? 'ok' : (d.delta > 0 ? 'warn' : 'over');
-        return `
-          <div class="balance-delta ${cls}">
-            <span>${fromTitle} → ${toTitle}</span>
-            <span>${d.delta === 0 ? 'сходится' : (d.delta > 0 ? 'не хватает ' + d.delta : 'лишнее ' + Math.abs(d.delta))}</span>
-          </div>
-        `;
+      const cells = stageCols.map(col => {
+        const stageData = nom.per_stage.find(s => s.code === col.code);
+        const total = stageData ? stageData.total : 0;
+        const d = deltaByToStage[col.code];
+        let cls = '';
+        let title = '';
+        if (d && d.delta !== 0) {
+          cls = d.delta > 0 ? 'cell-warn' : 'cell-over';
+          title = d.delta > 0 ? `не хватает ${d.delta} относительно предыдущего этапа` : `лишнее ${Math.abs(d.delta)} относительно предыдущего этапа`;
+        }
+        return `<td class="${cls}" title="${title}">${total > 0 ? total : '—'}</td>`;
       }).join('');
 
-      return `
-        <div class="card balance-card">
-          <div class="row1">${nom.nomenclature_name}</div>
-          ${stagesRow}
-          ${deltasRow ? `<div class="balance-deltas-block">${deltasRow}</div>` : ''}
-        </div>
-      `;
+      return `<tr><td class="row-label">${nom.nomenclature_name}</td>${cells}</tr>`;
     }).join('');
+
+    const totalCells = stageCols.map(col => {
+      const sum = data.reduce((acc, nom) => {
+        const s = nom.per_stage.find(x => x.code === col.code);
+        return acc + (s ? s.total : 0);
+      }, 0);
+      return `<td>${sum > 0 ? sum : '—'}</td>`;
+    }).join('');
+
+    resultEl.innerHTML = `
+      <div class="balance-table-wrap">
+        <table class="balance-table">
+          <thead>
+            <tr>
+              <th>Номенклатура</th>
+              ${stageCols.map(c => `<th>${c.title}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+            <tr class="row-total"><td class="row-label">Итого</td>${totalCells}</tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="balance-legend">
+        <span class="legend-item"><span class="legend-swatch warn"></span> не хватает относительно предыдущего этапа</span>
+        <span class="legend-item"><span class="legend-swatch over"></span> больше, чем должно быть</span>
+      </div>
+    `;
   }
 
   document.getElementById('balanceFilterForm').addEventListener('submit', (e) => {
@@ -406,23 +491,33 @@ async function renderShiftsTab(stages) {
       .map(stage => {
         const employees = byStage[stage.code];
 
-        // Итого по этапу — суммируем по номенклатуре(+сорт)
+        // Итого по этапу — суммируем по номенклатуре(+сорт), фото в суммы не идут
         const stageTotals = {};
-        Object.values(employees).flat().forEach(r => {
+        Object.values(employees).flat().filter(r => !r.is_photo).forEach(r => {
           const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
           stageTotals[key] = (stageTotals[key] || 0) + r.quantity;
         });
 
         const employeeBlocks = Object.entries(employees).map(([name, items]) => {
-          const rowsHtml = items.map(r => `
-            <div class="item-line" data-entry-id="${r.id}">
-              <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}</span>
-              <span class="right">
-                <span class="entry-time">${r.created_at.slice(11, 16)}</span>
-                <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
-              </span>
-            </div>
-          `).join('');
+          const rowsHtml = items.map(r => {
+            if (r.is_photo) {
+              return `
+                <div class="item-line">
+                  <span>📷 Фото накладной${r.comment ? ' — ' + r.comment : ''}</span>
+                  <span class="right"><span class="entry-time">${r.created_at.slice(11, 16)}</span></span>
+                </div>
+              `;
+            }
+            return `
+              <div class="item-line" data-entry-id="${r.id}">
+                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}</span>
+                <span class="right">
+                  <span class="entry-time">${r.created_at.slice(11, 16)}</span>
+                  <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
+                </span>
+              </div>
+            `;
+          }).join('');
           const lastTime = items[items.length - 1].created_at.slice(11, 16);
           return `
             <div class="employee-block">
@@ -432,16 +527,20 @@ async function renderShiftsTab(stages) {
           `;
         }).join('');
 
-        return `
-          <div class="card stage-card">
-            <div class="row1">${stage.title}</div>
-            ${employeeBlocks}
+        const totalsBlock = Object.keys(stageTotals).length > 0 ? `
             <div class="stage-total">
               <div class="row2" style="margin-bottom:4px;">Итого по этапу</div>
               ${Object.entries(stageTotals).map(([k, v]) => `
                 <div class="item-line total"><span>${k}</span><span>${v}</span></div>
               `).join('')}
             </div>
+        ` : '';
+
+        return `
+          <div class="card stage-card">
+            <div class="row1">${stage.title}</div>
+            ${employeeBlocks}
+            ${totalsBlock}
           </div>
         `;
       }).join('');
