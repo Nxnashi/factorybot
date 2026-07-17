@@ -264,6 +264,12 @@
     z-index: 50;
   }
   .toast.show { transform: translateY(0); }
+  .date-dmy-hint {
+    font-size: 11px;
+    color: var(--hint);
+    margin-left: 6px;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -277,6 +283,28 @@
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
+
+// Узбекский/русский формат даты (ДД.ММ.ГГГГ) рядом с нативным полем — на некоторых
+// телефонах системная локаль показывает американский формат внутри самого пикера,
+// это не лечится из веб-страницы, поэтому подписываем явно рядом.
+function formatDMY(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
+}
+function attachDateHints(root) {
+  root.querySelectorAll('input[type="date"]').forEach(input => {
+    if (input.dataset.hintAttached) return;
+    input.dataset.hintAttached = '1';
+    const hint = document.createElement('span');
+    hint.className = 'date-dmy-hint';
+    hint.textContent = formatDMY(input.value);
+    input.insertAdjacentElement('afterend', hint);
+    input.addEventListener('input', () => { hint.textContent = formatDMY(input.value); });
+  });
+}
+new MutationObserver(() => attachDateHints(document.body)).observe(document.body, { childList: true, subtree: true });
+attachDateHints(document.body);
 
 const API = '';
 const app = document.getElementById('app');
@@ -491,7 +519,7 @@ function renderForm(me, stage, nomenclature) {
     if (stage.needs_grade) {
       return `
         <div class="item-card" data-id="${item.id}" data-grade="true">
-          <div class="name">${item.name} <span class="unit">${item.unit}</span></div>
+          <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
           <div class="grade-grid">
             ${GRADES.map(g => `
               <div class="grade-cell ${g.code === 'brak' ? 'brak' : ''}">
@@ -505,7 +533,7 @@ function renderForm(me, stage, nomenclature) {
     }
     return `
       <div class="item-card" data-id="${item.id}" data-grade="false">
-        <div class="name">${item.name} <span class="unit">${item.unit}</span></div>
+        <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
         <div class="qty-row">
           <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
         </div>

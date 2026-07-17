@@ -98,7 +98,7 @@ router.get('/today-photos/:telegramId', (req, res) => {
 
 // Активная номенклатура для формы
 router.get('/nomenclature', (req, res) => {
-  const rows = db.prepare('SELECT id, name, unit FROM nomenclature WHERE active = 1 ORDER BY sort_order, id').all();
+  const rows = db.prepare('SELECT id, name, article, unit FROM nomenclature WHERE active = 1 ORDER BY sort_order, id').all();
   res.json(rows);
 });
 

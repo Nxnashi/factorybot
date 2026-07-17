@@ -283,6 +283,12 @@
     font-weight: 700;
   }
   .open-days-list .item-line { padding-left: 0; }
+  .date-dmy-hint {
+    font-size: 11px;
+    color: var(--hint);
+    margin-left: 6px;
+    white-space: nowrap;
+  }
 </style>
 </head>
 <body>
@@ -293,6 +299,25 @@
 const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
+
+function formatDMY(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
+}
+function attachDateHints(root) {
+  root.querySelectorAll('input[type="date"]').forEach(input => {
+    if (input.dataset.hintAttached) return;
+    input.dataset.hintAttached = '1';
+    const hint = document.createElement('span');
+    hint.className = 'date-dmy-hint';
+    hint.textContent = formatDMY(input.value);
+    input.insertAdjacentElement('afterend', hint);
+    input.addEventListener('input', () => { hint.textContent = formatDMY(input.value); });
+  });
+}
+new MutationObserver(() => attachDateHints(document.body)).observe(document.body, { childList: true, subtree: true });
+attachDateHints(document.body);
 
 function getTelegramId() {
   const fromTg = tg?.initDataUnsafe?.user?.id;
@@ -681,6 +706,8 @@ async function renderNomTab() {
     <form class="inline" id="nomForm">
       <label>Название позиции</label>
       <input name="name" required placeholder="Например: Бачок">
+      <label>Артикул</label>
+      <input name="article" placeholder="Например: 25">
       <label>Единица измерения</label>
       <input name="unit" value="шт">
       <button type="submit">Добавить позицию</button>
@@ -688,7 +715,7 @@ async function renderNomTab() {
     <div id="nomList">
       ${items.map(n => `
         <div class="card">
-          <div class="row1">${n.name} ${n.active ? '' : '(скрыто)'}</div>
+          <div class="row1">${n.name}${n.article ? ` (${n.article})` : ''} ${n.active ? '' : '(скрыто)'}</div>
           <div class="row2">${n.unit}</div>
           <div class="actions">
             <button data-toggle-nom="${n.id}" data-active="${n.active}">${n.active ? 'Скрыть' : 'Показать'}</button>
@@ -704,7 +731,7 @@ async function renderNomTab() {
     await fetch('/api/admin/nomenclature', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ name: fd.get('name'), unit: fd.get('unit') || 'шт' }),
+      body: JSON.stringify({ name: fd.get('name'), article: fd.get('article') || null, unit: fd.get('unit') || 'шт' }),
     });
     renderNomTab();
   });

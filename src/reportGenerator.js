@@ -26,7 +26,8 @@ async function buildReportWorkbook(from, to) {
   const stageTitleByCode = Object.fromEntries(STAGES.map(s => [s.code, s.title]));
 
   const allRows = db.prepare(`
-    SELECT e.entry_date, e.stage, e.employee_name, n.name AS nomenclature_name,
+    SELECT e.entry_date, e.stage, e.employee_name,
+           n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
            e.quantity, e.grade, e.comment, e.created_at
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id

@@ -90,7 +90,8 @@ router.get('/entries', (req, res) => {
 
   const rows = db.prepare(`
     SELECT e.id, e.entry_date, e.stage, e.telegram_id, e.employee_name,
-           n.name AS nomenclature_name, e.quantity, e.grade, e.comment, e.created_at, 0 AS is_photo
+           n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
+           e.quantity, e.grade, e.comment, e.created_at, 0 AS is_photo
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.entry_date BETWEEN ? AND ?
@@ -134,7 +135,8 @@ router.get('/balance', (req, res) => {
   const to = date_to || from;
 
   const rows = db.prepare(`
-    SELECT n.id AS nomenclature_id, n.name AS nomenclature_name,
+    SELECT n.id AS nomenclature_id,
+           n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
            e.stage, e.grade, SUM(e.quantity) AS total
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
@@ -158,7 +160,7 @@ router.get('/balance', (req, res) => {
 
   // Замес меряется сырьём (кг/партии), а не штуками готовых изделий — сравнивать напрямую
   // с формовкой некорректно, поэтому в цепочку сверки берём только этапы поштучного учёта
-  const BALANCE_CHAIN = ['molding', 'qc_molding', 'glazing', 'kiln', 'qc_final'];
+  const BALANCE_CHAIN = ['molding', 'qc_molding', 'glazing', 'kiln', 'breakage', 'qc_final'];
 
   const stageCodes = STAGES.map(s => s.code);
   const result = Object.entries(byNom).map(([nomenclatureId, data]) => {
@@ -206,18 +208,18 @@ router.get('/nomenclature', (req, res) => {
 });
 
 router.post('/nomenclature', (req, res) => {
-  const { name, unit } = req.body;
+  const { name, article, unit } = req.body;
   if (!name) return res.status(400).json({ error: 'bad_request' });
   const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM nomenclature').get().m;
-  const info = db.prepare('INSERT INTO nomenclature (name, unit, sort_order) VALUES (?, ?, ?)')
-    .run(name, unit || 'шт', maxOrder + 1);
+  const info = db.prepare('INSERT INTO nomenclature (name, article, unit, sort_order) VALUES (?, ?, ?, ?)')
+    .run(name, article || null, unit || 'шт', maxOrder + 1);
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 
 router.put('/nomenclature/:id', (req, res) => {
-  const { name, unit, active } = req.body;
-  db.prepare('UPDATE nomenclature SET name = COALESCE(?, name), unit = COALESCE(?, unit), active = COALESCE(?, active) WHERE id = ?')
-    .run(name ?? null, unit ?? null, active === undefined ? null : (active ? 1 : 0), req.params.id);
+  const { name, article, unit, active } = req.body;
+  db.prepare('UPDATE nomenclature SET name = COALESCE(?, name), article = COALESCE(?, article), unit = COALESCE(?, unit), active = COALESCE(?, active) WHERE id = ?')
+    .run(name ?? null, article ?? null, unit ?? null, active === undefined ? null : (active ? 1 : 0), req.params.id);
   res.json({ ok: true });
 });
 
