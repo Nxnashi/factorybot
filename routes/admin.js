@@ -105,7 +105,7 @@ router.get('/entries', (req, res) => {
     WHERE entry_date BETWEEN ? AND ?
     ORDER BY employee_name, created_at
   `).all(from, to).map(p => ({
-    id: p.id,
+    id: `photo-${p.id}`,
     entry_date: p.entry_date,
     stage: 'intake',
     telegram_id: p.telegram_id,
@@ -118,12 +118,42 @@ router.get('/entries', (req, res) => {
     is_photo: 1,
   }));
 
-  res.json([...rows, ...photoRows]);
+  // Расход сырья по замесу — тоже в общей ленте, отдельным типом
+  const materialRows = db.prepare(`
+    SELECT me.id, me.entry_date, me.stage, me.telegram_id, me.employee_name,
+           m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS nomenclature_name,
+           me.quantity, me.comment, me.created_at
+    FROM material_entries me
+    JOIN materials m ON m.id = me.material_id
+    WHERE me.entry_date BETWEEN ? AND ?
+    ORDER BY me.stage, me.employee_name, me.created_at
+  `).all(from, to).map(r => ({
+    id: `material-${r.id}`,
+    entry_date: r.entry_date,
+    stage: r.stage,
+    telegram_id: r.telegram_id,
+    employee_name: r.employee_name,
+    nomenclature_name: r.nomenclature_name,
+    quantity: r.quantity,
+    grade: null,
+    comment: r.comment,
+    created_at: r.created_at,
+    is_photo: 0,
+  }));
+
+  res.json([...rows.map(r => ({ ...r, id: String(r.id) })), ...photoRows, ...materialRows]);
 });
 
 // Удалить запись (админ может удалить любую, за любую дату — для исправления ошибок задним числом)
+// id может быть с префиксом "photo-<id>" или "material-<id>", иначе — обычная запись из entries
 router.delete('/entries/:id', (req, res) => {
-  const info = db.prepare('DELETE FROM entries WHERE id = ?').run(req.params.id);
+  const raw = req.params.id;
+  let table = 'entries';
+  let realId = raw;
+  if (raw.startsWith('photo-')) { table = 'intake_photos'; realId = raw.replace('photo-', ''); }
+  else if (raw.startsWith('material-')) { table = 'material_entries'; realId = raw.replace('material-', ''); }
+
+  const info = db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(realId);
   if (info.changes === 0) return res.status(404).json({ error: 'not_found' });
   res.json({ ok: true });
 });
@@ -226,6 +256,31 @@ router.put('/nomenclature/:id', (req, res) => {
 router.delete('/nomenclature/:id', (req, res) => {
   // Мягкое удаление — просто деактивируем, чтобы не терять историю по старым записям
   db.prepare('UPDATE nomenclature SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Сырьё (ТМЦ) для замеса глины / замеса глазури ---
+router.get('/materials', (req, res) => {
+  const rows = db.prepare('SELECT * FROM materials ORDER BY category, sort_order, id').all();
+  res.json(rows);
+});
+
+router.post('/materials', (req, res) => {
+  const { name, article, category, unit } = req.body;
+  if (!name || !category) return res.status(400).json({ error: 'bad_request' });
+  if (!['clay_mixing', 'glaze_mixing'].includes(category)) {
+    return res.status(400).json({ error: 'bad_category' });
+  }
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM materials WHERE category = ?').get(category).m;
+  const info = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order) VALUES (?, ?, ?, ?, ?)')
+    .run(name, article || null, category, unit || 'кг', maxOrder + 1);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+router.put('/materials/:id', (req, res) => {
+  const { name, article, unit, active } = req.body;
+  db.prepare('UPDATE materials SET name = COALESCE(?, name), article = COALESCE(?, article), unit = COALESCE(?, unit), active = COALESCE(?, active) WHERE id = ?')
+    .run(name ?? null, article ?? null, unit ?? null, active === undefined ? null : (active ? 1 : 0), req.params.id);
   res.json({ ok: true });
 });
 

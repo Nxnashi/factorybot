@@ -383,6 +383,8 @@ async function init() {
     currentStage = me.stages[0];
     if (currentStage.form_type === 'photo') {
       renderPhotoForm(me, currentStage);
+    } else if (currentStage.form_type === 'materials') {
+      renderMaterialsForm(me, currentStage);
     } else {
       renderForm(me, currentStage, currentNomenclature);
       loadToday(telegramId);
@@ -395,8 +397,8 @@ async function init() {
 function renderStagePicker(me) {
   app.innerHTML = `
     <header>
-      <div class="eyebrow">Выбор этапа</div>
-      <h1>Учёт производства</h1>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>Выбор этапа</h1>
       <div class="who">${me.full_name}</div>
     </header>
     <main>
@@ -412,6 +414,8 @@ function renderStagePicker(me) {
       currentStage = stage;
       if (stage.form_type === 'photo') {
         renderPhotoForm(me, stage);
+      } else if (stage.form_type === 'materials') {
+        renderMaterialsForm(me, stage);
       } else {
         renderForm(me, stage, currentNomenclature);
         loadToday(me.telegram_id);
@@ -428,8 +432,8 @@ function renderPhotoForm(me, stage) {
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">${stage.title}</div>
-      <h1>Учёт производства</h1>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
       <div class="who">${me.full_name} ${switchLink}</div>
     </header>
     <main>
@@ -509,6 +513,109 @@ function renderPhotoForm(me, stage) {
   loadTodayPhotos(me.telegram_id);
 }
 
+async function renderMaterialsForm(me, stage) {
+  const today = new Date().toISOString().slice(0, 10);
+  const materials = await (await fetch(`${API}/api/materials?stage=${stage.code}`)).json();
+
+  const itemsHtml = materials.map(item => {
+    const searchText = (item.name + ' ' + (item.article || '')).toLowerCase();
+    return `
+      <div class="item-card" data-id="${item.id}" data-grade="false" data-search="${searchText}">
+        <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
+        <div class="qty-row">
+          <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const switchLink = me.stages.length > 1
+    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
+    : '';
+
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
+      <div class="who">${me.full_name} ${switchLink}</div>
+    </header>
+    <main>
+      <div class="date-row">
+        <label>Дата смены</label>
+        <input type="date" id="entryDate" value="${today}" max="${today}">
+      </div>
+      <div class="search-row">
+        <input type="text" id="itemSearch" placeholder="🔍 Поиск по названию или артикулу" autocomplete="off">
+      </div>
+      <div id="itemsList">${itemsHtml}</div>
+      <div class="today-log" id="todayLog"></div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn" id="submitBtn">Отправить данные</button>
+    </div>
+  `;
+
+  document.getElementById('itemSearch').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#itemsList .item-card').forEach(card => {
+      const match = !q || card.dataset.search.includes(q);
+      card.style.display = match ? '' : 'none';
+    });
+  });
+
+  document.getElementById('submitBtn').addEventListener('click', () => submitMaterials(me, stage));
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+
+  loadToday(me.telegram_id);
+}
+
+async function submitMaterials(me, stage) {
+  const btn = document.getElementById('submitBtn');
+  const entryDate = document.getElementById('entryDate').value;
+  const cards = document.querySelectorAll('.item-card');
+  const items = [];
+
+  cards.forEach(card => {
+    const id = Number(card.dataset.id);
+    const input = card.querySelector('[data-qty]');
+    const qty = Number(input.value || 0);
+    if (qty > 0) items.push({ material_id: id, quantity: qty });
+  });
+
+  if (items.length === 0) {
+    showToast('Заполни хотя бы одну позицию');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Отправка…';
+
+  try {
+    const res = await fetch(`${API}/api/submit-material`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, items }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`Сохранено: ${data.saved} позиций`);
+      tg?.HapticFeedback?.notificationOccurred('success');
+      document.querySelectorAll('input[type="number"]').forEach(i => i.value = '');
+      loadToday(me.telegram_id);
+    } else if (data.error === 'day_closed') {
+      showToast('Этот день уже закрыт. Обратись к администратору.');
+    } else {
+      showToast('Ошибка при сохранении');
+    }
+  } catch (e) {
+    showToast('Ошибка сети');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Отправить данные';
+  }
+}
+
 async function loadTodayPhotos(telegramId) {
   const res = await fetch(`${API}/api/today-photos/${telegramId}`);
   const rows = await res.json();
@@ -565,8 +672,8 @@ function renderForm(me, stage, nomenclature) {
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">${stage.title}</div>
-      <h1>Учёт производства</h1>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
       <div class="who">${me.full_name} ${switchLink}</div>
     </header>
     <main>

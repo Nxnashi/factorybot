@@ -102,6 +102,69 @@ router.get('/nomenclature', (req, res) => {
   res.json(rows);
 });
 
+// Активное сырьё (ТМЦ) для конкретного под-этапа замеса — clay_mixing или glaze_mixing
+router.get('/materials', (req, res) => {
+  const { stage } = req.query;
+  if (!stage) return res.status(400).json({ error: 'bad_request' });
+  const rows = db.prepare('SELECT id, name, article, unit FROM materials WHERE category = ? AND active = 1 ORDER BY sort_order, id').all(stage);
+  res.json(rows);
+});
+
+// Отправка расхода сырья по замесу
+// body: { telegram_id, entry_date, stage, items: [{ material_id, quantity, comment? }] }
+router.post('/submit-material', (req, res) => {
+  const { telegram_id, entry_date, stage, items } = req.body;
+
+  if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+  if (!['clay_mixing', 'glaze_mixing'].includes(stage)) {
+    return res.status(400).json({ error: 'bad_stage' });
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
+  if (!user) {
+    return res.status(404).json({ error: 'not_registered' });
+  }
+
+  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
+  if (closedDay) {
+    return res.status(403).json({ error: 'day_closed' });
+  }
+
+  const allowedStages = parseStages(user.stage);
+  if (!allowedStages.includes(stage)) {
+    return res.status(403).json({ error: 'stage_not_allowed' });
+  }
+
+  const insert = db.prepare(`
+    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, comment)
+    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @material_id, @quantity, @comment)
+  `);
+  const insertMany = db.transaction((rows) => {
+    for (const row of rows) insert.run(row);
+  });
+
+  const rows = items
+    .filter(it => Number(it.quantity) > 0)
+    .map(it => ({
+      entry_date,
+      stage,
+      telegram_id: user.telegram_id,
+      employee_name: user.full_name,
+      material_id: it.material_id,
+      quantity: Number(it.quantity),
+      comment: it.comment || null,
+    }));
+
+  if (rows.length === 0) {
+    return res.status(400).json({ error: 'no_valid_items' });
+  }
+
+  insertMany(rows);
+  res.json({ ok: true, saved: rows.length });
+});
+
 // Отправка партии записей за один сабмит формы
 // body: { telegram_id, entry_date, stage, items: [{ nomenclature_id, quantity, grade?, comment? }] }
 router.post('/submit', (req, res) => {
@@ -159,13 +222,18 @@ router.post('/submit', (req, res) => {
 });
 
 // Удалить свою запись (только за сегодня — чтобы нельзя было редактировать закрытую историю)
+// id может быть с префиксом "material-<id>" для расхода сырья, иначе — обычная запись
 router.delete('/entries/:id', (req, res) => {
   const { telegram_id } = req.query;
   const { id } = req.params;
   if (!telegram_id) return res.status(400).json({ error: 'bad_request' });
 
   const today = new Date().toISOString().slice(0, 10);
-  const entry = db.prepare('SELECT * FROM entries WHERE id = ?').get(id);
+  const isMaterial = id.startsWith('material-');
+  const table = isMaterial ? 'material_entries' : 'entries';
+  const realId = isMaterial ? id.replace('material-', '') : id;
+
+  const entry = db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(realId);
 
   if (!entry) return res.status(404).json({ error: 'not_found' });
   if (entry.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
@@ -174,22 +242,34 @@ router.delete('/entries/:id', (req, res) => {
   const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry.entry_date);
   if (closedDay) return res.status(403).json({ error: 'day_closed' });
 
-  db.prepare('DELETE FROM entries WHERE id = ?').run(id);
+  db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(realId);
   res.json({ ok: true });
 });
 
-// История за сегодня для этого сотрудника (чтобы видел что уже вбил)
+// История за сегодня для этого сотрудника (чтобы видел что уже вбил) — количественные записи + расход сырья
 router.get('/today/:telegramId', (req, res) => {
   const { telegramId } = req.params;
   const today = new Date().toISOString().slice(0, 10);
+
   const rows = db.prepare(`
     SELECT e.id, e.stage, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.telegram_id = ? AND e.entry_date = ?
     ORDER BY e.created_at DESC
-  `).all(telegramId, today);
-  const withTitles = rows.map(r => ({ ...r, stage_title: (getStageMeta(r.stage) || {}).title || r.stage }));
+  `).all(telegramId, today).map(r => ({ ...r, id: String(r.id) }));
+
+  const materialRows = db.prepare(`
+    SELECT me.id, me.stage, me.quantity, me.comment, me.created_at,
+           m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS nomenclature_name
+    FROM material_entries me
+    JOIN materials m ON m.id = me.material_id
+    WHERE me.telegram_id = ? AND me.entry_date = ?
+    ORDER BY me.created_at DESC
+  `).all(telegramId, today).map(r => ({ ...r, id: `material-${r.id}`, grade: null }));
+
+  const all = [...rows, ...materialRows].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const withTitles = all.map(r => ({ ...r, stage_title: (getStageMeta(r.stage) || {}).title || r.stage }));
   res.json(withTitles);
 });
 

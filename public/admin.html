@@ -354,12 +354,14 @@ function render(stages) {
       <div class="tab" data-tab="balance">Баланс</div>
       <div class="tab" data-tab="users">Сотрудники</div>
       <div class="tab" data-tab="nom">Номенклатура</div>
+      <div class="tab" data-tab="materials">Сырьё</div>
       <div class="tab" data-tab="export">Экспорт</div>
     </div>
     <section class="active" id="tab-shifts"></section>
     <section id="tab-balance"></section>
     <section id="tab-users"></section>
     <section id="tab-nom"></section>
+    <section id="tab-materials"></section>
     <section id="tab-export"></section>
   `;
 
@@ -376,6 +378,7 @@ function render(stages) {
   renderBalanceTab(stages);
   renderUsersTab(stages);
   renderNomTab();
+  renderMaterialsTab();
   renderExportTab();
 }
 
@@ -396,7 +399,7 @@ async function renderBalanceTab(stages) {
   `;
 
   // Приход ТМЦ — фото, в количественный баланс не входит
-  const stageCols = stages.filter(s => s.formType !== 'photo');
+  const stageCols = stages.filter(s => s.formType === 'quantity');
 
   async function loadBalance(dateFrom, dateTo) {
     const resultEl = document.getElementById('balanceResult');
@@ -527,9 +530,12 @@ async function renderShiftsTab(stages) {
           const rowsHtml = items.map(r => {
             if (r.is_photo) {
               return `
-                <div class="item-line">
+                <div class="item-line" data-entry-id="${r.id}">
                   <span>📷 Фото накладной${r.comment ? ' — ' + r.comment : ''}</span>
-                  <span class="right"><span class="entry-time">${r.created_at.slice(11, 16)}</span></span>
+                  <span class="right">
+                    <span class="entry-time">${r.created_at.slice(11, 16)}</span>
+                    <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
+                  </span>
                 </div>
               `;
             }
@@ -745,6 +751,69 @@ async function renderNomTab() {
         body: JSON.stringify({ active: !active }),
       });
       renderNomTab();
+    });
+  });
+}
+
+// --- Сырьё (ТМЦ) для замеса глины / замеса глазури ---
+async function renderMaterialsTab() {
+  const el = document.getElementById('tab-materials');
+  const items = await (await fetch('/api/admin/materials', { headers: authHeaders() })).json();
+  const CATEGORY_LABELS = { clay_mixing: 'Замес глины', glaze_mixing: 'Замес глазури' };
+
+  el.innerHTML = `
+    <form class="inline" id="matForm">
+      <label>Название сырья</label>
+      <input name="name" required placeholder="Например: Кварц">
+      <label>Артикул (необязательно)</label>
+      <input name="article" placeholder="Например: 2">
+      <label>Категория</label>
+      <select name="category">
+        <option value="clay_mixing">Замес глины</option>
+        <option value="glaze_mixing">Замес глазури</option>
+      </select>
+      <label>Единица измерения</label>
+      <input name="unit" value="кг">
+      <button type="submit">Добавить сырьё</button>
+    </form>
+    <div id="matList">
+      ${items.map(m => `
+        <div class="card">
+          <div class="row1">${m.name}${m.article ? ` (${m.article})` : ''} ${m.active ? '' : '(скрыто)'}</div>
+          <div class="row2">${CATEGORY_LABELS[m.category] || m.category} · ${m.unit}</div>
+          <div class="actions">
+            <button data-toggle-mat="${m.id}" data-active="${m.active}">${m.active ? 'Скрыть' : 'Показать'}</button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  el.querySelector('#matForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await fetch('/api/admin/materials', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        name: fd.get('name'),
+        article: fd.get('article') || null,
+        category: fd.get('category'),
+        unit: fd.get('unit') || 'кг',
+      }),
+    });
+    renderMaterialsTab();
+  });
+
+  el.querySelectorAll('[data-toggle-mat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const active = btn.dataset.active === '1';
+      await fetch(`/api/admin/materials/${btn.dataset.toggleMat}`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ active: !active }),
+      });
+      renderMaterialsTab();
     });
   });
 }

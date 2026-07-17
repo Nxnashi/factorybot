@@ -5,10 +5,11 @@ const db = new Database(path.join(__dirname, '..', 'factory.db'));
 db.pragma('journal_mode = WAL');
 
 // Этапы производства (фиксированный список, порядок важен для отчёта)
-// formType: 'quantity' — обычная форма номенклатура+количество, 'photo' — фото документа
+// formType: 'quantity' — номенклатура готовой продукции, 'photo' — фото документа, 'materials' — сырьё (ТМЦ)
 const STAGES = [
   { code: 'intake', title: 'Приход ТМЦ', needsGrade: false, formType: 'photo' },
-  { code: 'mixing', title: 'Замес глины', needsGrade: false, formType: 'quantity' },
+  { code: 'clay_mixing', title: 'Замес глины', needsGrade: false, formType: 'materials' },
+  { code: 'glaze_mixing', title: 'Замес глазури', needsGrade: false, formType: 'materials' },
   { code: 'molding', title: 'Формовочный цех', needsGrade: false, formType: 'quantity' },
   { code: 'qc_molding', title: 'QC промежуточный контроль качества', needsGrade: true, formType: 'quantity' },
   { code: 'glazing', title: 'Глазировка', needsGrade: false, formType: 'quantity' },
@@ -65,12 +66,48 @@ CREATE TABLE IF NOT EXISTS intake_photos (
   caption       TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS materials (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  article    TEXT,
+  category   TEXT NOT NULL,   -- 'clay_mixing' или 'glaze_mixing'
+  unit       TEXT NOT NULL DEFAULT 'кг',
+  active     INTEGER NOT NULL DEFAULT 1,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS material_entries (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date    TEXT NOT NULL,
+  stage         TEXT NOT NULL,
+  telegram_id   TEXT NOT NULL,
+  employee_name TEXT NOT NULL,
+  material_id   INTEGER NOT NULL,
+  quantity      REAL NOT NULL,
+  comment       TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (material_id) REFERENCES materials(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_entries_date_stage ON material_entries(entry_date, stage);
 `);
 
 // Миграция: если база создана до появления поля article — добавляем колонку
 const nomCols = db.prepare("PRAGMA table_info(nomenclature)").all().map(c => c.name);
 if (!nomCols.includes('article')) {
   db.exec('ALTER TABLE nomenclature ADD COLUMN article TEXT');
+}
+
+// Миграция: старый единый этап "Замес" (mixing) разделили на два — переносим всех,
+// кто был на старом коде, на оба новых, чтобы не потеряли доступ
+const legacyMixingUsers = db.prepare("SELECT telegram_id, stage FROM users WHERE stage LIKE '%mixing%'").all()
+  .filter(u => u.stage.split(',').map(s => s.trim()).includes('mixing'));
+for (const u of legacyMixingUsers) {
+  const codes = u.stage.split(',').map(s => s.trim()).filter(c => c !== 'mixing');
+  if (!codes.includes('clay_mixing')) codes.push('clay_mixing');
+  if (!codes.includes('glaze_mixing')) codes.push('glaze_mixing');
+  db.prepare('UPDATE users SET stage = ? WHERE telegram_id = ?').run(codes.join(','), u.telegram_id);
 }
 
 // Миграция: если этап был удалён из STAGES (например "Приход ТМЦ"), но кому-то ещё назначен —
@@ -139,6 +176,53 @@ if (count === 0) {
   const insert = db.prepare('INSERT INTO nomenclature (name, unit, sort_order) VALUES (?, ?, ?)');
   const seed = ['Унитаз', 'Чашагён', 'Крышка'];
   seed.forEach((name, i) => insert.run(name, 'шт', i));
+}
+
+// Каталог сырья (ТМЦ) для замеса глины и замеса глазури — отдельный от готовой продукции,
+// добавляем то, чего ещё нет (по названию+категории), не трогая накопленное
+const MATERIALS_CATALOG = [
+  // Замес глины — с артикулами
+  { name: 'Полевой шпат', article: '1', category: 'clay_mixing' },
+  { name: 'Сырье полевой шпат', article: 'R1', category: 'clay_mixing' },
+  { name: 'Кварц', article: '2', category: 'clay_mixing' },
+  { name: 'Доломит', article: '3', category: 'clay_mixing' },
+  { name: 'Каолин серый обогащенный', article: '4', category: 'clay_mixing' },
+  { name: 'Каолин серый необогащенный', article: 'R4', category: 'clay_mixing' },
+  { name: 'Каолин 30 обогащенный', article: '5', category: 'clay_mixing' },
+  { name: 'Каолин 30 необогащенный', article: 'R5', category: 'clay_mixing' },
+  { name: 'Глинозем', article: 'R7', category: 'clay_mixing' },
+  { name: 'Каолин 78 необогащенный', article: 'R6', category: 'clay_mixing' },
+  { name: 'Каолин 78 обогащенный', article: '6', category: 'clay_mixing' },
+  { name: 'Сода', article: '8', category: 'clay_mixing' },
+  { name: 'Жидкое стекло', article: '9', category: 'clay_mixing' },
+  { name: 'Глинозем', article: '10', category: 'clay_mixing' },
+  { name: 'Вода', article: '11', category: 'clay_mixing' },
+  { name: 'Глина', article: '12', category: 'clay_mixing' },
+  { name: 'Камни для перемолки', article: '13', category: 'clay_mixing' },
+  // Замес глазури — пока без артикулов
+  { name: 'Полевой шпат', article: null, category: 'glaze_mixing' },
+  { name: 'Кварц', article: null, category: 'glaze_mixing' },
+  { name: 'Кальцит', article: null, category: 'glaze_mixing' },
+  { name: 'Тальк', article: null, category: 'glaze_mixing' },
+  { name: 'Оксид алюминия', article: null, category: 'glaze_mixing' },
+  { name: 'Барий карбонат', article: null, category: 'glaze_mixing' },
+  { name: 'Силикат циркония', article: null, category: 'glaze_mixing' },
+  { name: 'Оксид цинка', article: null, category: 'glaze_mixing' },
+  { name: 'Каолин', article: null, category: 'glaze_mixing' },
+  { name: 'КМЦ клей', article: null, category: 'glaze_mixing' },
+];
+const existingMaterials = new Set(
+  db.prepare('SELECT name, category, article FROM materials').all()
+    .map(r => `${r.name}|${r.category}|${r.article || ''}`)
+);
+const maxMatOrderRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM materials').get();
+let nextMatOrder = maxMatOrderRow.m + 1;
+const insertMaterial = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order) VALUES (?, ?, ?, ?, ?)');
+for (const m of MATERIALS_CATALOG) {
+  const key = `${m.name}|${m.category}|${m.article || ''}`;
+  if (existingMaterials.has(key)) continue;
+  insertMaterial.run(m.name, m.article, m.category, 'кг', nextMatOrder);
+  nextMatOrder++;
 }
 
 module.exports = { db, STAGES };
