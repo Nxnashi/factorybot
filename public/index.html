@@ -270,6 +270,23 @@
     margin-left: 6px;
     white-space: nowrap;
   }
+  .search-row {
+    margin-bottom: 12px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    padding: 6px 0;
+    z-index: 10;
+  }
+  .search-row input {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 15px;
+  }
 </style>
 </head>
 <body>
@@ -516,9 +533,10 @@ function renderForm(me, stage, nomenclature) {
   const today = new Date().toISOString().slice(0, 10);
 
   const itemsHtml = nomenclature.map(item => {
+    const searchText = (item.name + ' ' + (item.article || '')).toLowerCase();
     if (stage.needs_grade) {
       return `
-        <div class="item-card" data-id="${item.id}" data-grade="true">
+        <div class="item-card" data-id="${item.id}" data-grade="true" data-search="${searchText}">
           <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
           <div class="grade-grid">
             ${GRADES.map(g => `
@@ -532,7 +550,7 @@ function renderForm(me, stage, nomenclature) {
       `;
     }
     return `
-      <div class="item-card" data-id="${item.id}" data-grade="false">
+      <div class="item-card" data-id="${item.id}" data-grade="false" data-search="${searchText}">
         <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
         <div class="qty-row">
           <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
@@ -556,13 +574,24 @@ function renderForm(me, stage, nomenclature) {
         <label>Дата смены</label>
         <input type="date" id="entryDate" value="${today}" max="${today}">
       </div>
-      ${itemsHtml}
+      <div class="search-row">
+        <input type="text" id="itemSearch" placeholder="🔍 Поиск по названию или артикулу" autocomplete="off">
+      </div>
+      <div id="itemsList">${itemsHtml}</div>
       <div class="today-log" id="todayLog"></div>
     </main>
     <div class="submit-bar">
       <button class="submit-btn" id="submitBtn">Отправить данные</button>
     </div>
   `;
+
+  document.getElementById('itemSearch').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    document.querySelectorAll('#itemsList .item-card').forEach(card => {
+      const match = !q || card.dataset.search.includes(q);
+      card.style.display = match ? '' : 'none';
+    });
+  });
 
   document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage));
   const switchBtn = document.getElementById('switchStageBtn');
