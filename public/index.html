@@ -56,6 +56,15 @@
     padding: 5px 10px;
     border-radius: 8px;
   }
+  .drum-change-btn {
+    border: 1px solid var(--accent);
+    background: var(--bg);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+    padding: 8px 14px;
+    border-radius: 10px;
+  }
   .picker-hint {
     font-size: 13px;
     color: var(--hint);
@@ -384,7 +393,7 @@ async function init() {
     if (currentStage.form_type === 'photo') {
       renderPhotoForm(me, currentStage);
     } else if (currentStage.form_type === 'materials') {
-      renderMaterialsForm(me, currentStage);
+      renderDrumPicker(me, currentStage);
     } else {
       renderForm(me, currentStage, currentNomenclature);
       loadToday(telegramId);
@@ -415,7 +424,7 @@ function renderStagePicker(me) {
       if (stage.form_type === 'photo') {
         renderPhotoForm(me, stage);
       } else if (stage.form_type === 'materials') {
-        renderMaterialsForm(me, stage);
+        renderDrumPicker(me, stage);
       } else {
         renderForm(me, stage, currentNomenclature);
         loadToday(me.telegram_id);
@@ -513,7 +522,28 @@ function renderPhotoForm(me, stage) {
   loadTodayPhotos(me.telegram_id);
 }
 
-async function renderMaterialsForm(me, stage) {
+async function renderDrumPicker(me, stage) {
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
+      <div class="who">${me.full_name}</div>
+    </header>
+    <main>
+      <div class="picker-hint">Какой барабан используешь?</div>
+      <button class="stage-pick-btn" data-drum="1">Барабан 1</button>
+      <button class="stage-pick-btn" data-drum="2">Барабан 2</button>
+      <button class="stage-pick-btn" data-drum="3">Барабан 3</button>
+    </main>
+  `;
+  app.querySelectorAll('[data-drum]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      renderMaterialsForm(me, stage, Number(btn.dataset.drum));
+    });
+  });
+}
+
+async function renderMaterialsForm(me, stage, drumNumber) {
   const today = new Date().toISOString().slice(0, 10);
   const materials = await (await fetch(`${API}/api/materials?stage=${stage.code}`)).json();
 
@@ -544,6 +574,10 @@ async function renderMaterialsForm(me, stage) {
         <label>Дата смены</label>
         <input type="date" id="entryDate" value="${today}" max="${today}">
       </div>
+      <div class="date-row">
+        <label>Барабан</label>
+        <button class="drum-change-btn" id="drumChangeBtn">Барабан ${drumNumber} · сменить</button>
+      </div>
       <div class="search-row">
         <input type="text" id="itemSearch" placeholder="🔍 Поиск по названию или артикулу" autocomplete="off">
       </div>
@@ -555,6 +589,8 @@ async function renderMaterialsForm(me, stage) {
     </div>
   `;
 
+  document.getElementById('drumChangeBtn').addEventListener('click', () => renderDrumPicker(me, stage));
+
   document.getElementById('itemSearch').addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
     document.querySelectorAll('#itemsList .item-card').forEach(card => {
@@ -563,14 +599,14 @@ async function renderMaterialsForm(me, stage) {
     });
   });
 
-  document.getElementById('submitBtn').addEventListener('click', () => submitMaterials(me, stage));
+  document.getElementById('submitBtn').addEventListener('click', () => submitMaterials(me, stage, drumNumber));
   const switchBtn = document.getElementById('switchStageBtn');
   if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 
   loadToday(me.telegram_id);
 }
 
-async function submitMaterials(me, stage) {
+async function submitMaterials(me, stage, drumNumber) {
   const btn = document.getElementById('submitBtn');
   const entryDate = document.getElementById('entryDate').value;
   const cards = document.querySelectorAll('.item-card');
@@ -595,7 +631,7 @@ async function submitMaterials(me, stage) {
     const res = await fetch(`${API}/api/submit-material`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, items }),
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, drum_number: drumNumber, items }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -775,7 +811,7 @@ async function loadToday(telegramId) {
     <h2>Внесено сегодня</h2>
     ${rows.map(r => `
       <div class="log-row" data-entry-id="${r.id}">
-        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title})</span></span>
+        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title}${r.drum_number ? ', барабан ' + r.drum_number : ''})</span></span>
         <span class="right">
           <span class="t">${r.created_at.slice(11, 16)}</span>
           <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>

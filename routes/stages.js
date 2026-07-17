@@ -111,15 +111,18 @@ router.get('/materials', (req, res) => {
 });
 
 // Отправка расхода сырья по замесу
-// body: { telegram_id, entry_date, stage, items: [{ material_id, quantity, comment? }] }
+// body: { telegram_id, entry_date, stage, drum_number, items: [{ material_id, quantity, comment? }] }
 router.post('/submit-material', (req, res) => {
-  const { telegram_id, entry_date, stage, items } = req.body;
+  const { telegram_id, entry_date, stage, drum_number, items } = req.body;
 
   if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'bad_request' });
   }
   if (!['clay_mixing', 'glaze_mixing'].includes(stage)) {
     return res.status(400).json({ error: 'bad_stage' });
+  }
+  if (![1, 2, 3].includes(Number(drum_number))) {
+    return res.status(400).json({ error: 'bad_drum' });
   }
 
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
@@ -138,8 +141,8 @@ router.post('/submit-material', (req, res) => {
   }
 
   const insert = db.prepare(`
-    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, comment)
-    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @material_id, @quantity, @comment)
+    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, drum_number, comment)
+    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @material_id, @quantity, @drum_number, @comment)
   `);
   const insertMany = db.transaction((rows) => {
     for (const row of rows) insert.run(row);
@@ -154,6 +157,7 @@ router.post('/submit-material', (req, res) => {
       employee_name: user.full_name,
       material_id: it.material_id,
       quantity: Number(it.quantity),
+      drum_number: Number(drum_number),
       comment: it.comment || null,
     }));
 
@@ -260,7 +264,7 @@ router.get('/today/:telegramId', (req, res) => {
   `).all(telegramId, today).map(r => ({ ...r, id: String(r.id) }));
 
   const materialRows = db.prepare(`
-    SELECT me.id, me.stage, me.quantity, me.comment, me.created_at,
+    SELECT me.id, me.stage, me.quantity, me.drum_number, me.comment, me.created_at,
            m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS nomenclature_name
     FROM material_entries me
     JOIN materials m ON m.id = me.material_id

@@ -122,7 +122,7 @@ router.get('/entries', (req, res) => {
   const materialRows = db.prepare(`
     SELECT me.id, me.entry_date, me.stage, me.telegram_id, me.employee_name,
            m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS nomenclature_name,
-           me.quantity, me.comment, me.created_at
+           me.quantity, me.drum_number, me.comment, me.created_at
     FROM material_entries me
     JOIN materials m ON m.id = me.material_id
     WHERE me.entry_date BETWEEN ? AND ?
@@ -136,6 +136,7 @@ router.get('/entries', (req, res) => {
     nomenclature_name: r.nomenclature_name,
     quantity: r.quantity,
     grade: null,
+    drum_number: r.drum_number,
     comment: r.comment,
     created_at: r.created_at,
     is_photo: 0,

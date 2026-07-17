@@ -541,7 +541,7 @@ async function renderShiftsTab(stages) {
             }
             return `
               <div class="item-line" data-entry-id="${r.id}">
-                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}</span>
+                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}${r.drum_number ? ` (барабан ${r.drum_number})` : ''}</span>
                 <span class="right">
                   <span class="entry-time">${r.created_at.slice(11, 16)}</span>
                   <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>

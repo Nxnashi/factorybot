@@ -55,6 +55,7 @@ async function buildReportWorkbook(from, to) {
       sheet.columns = [
         { header: 'Дата', key: 'entry_date', width: 12 },
         { header: 'Сотрудник', key: 'employee_name', width: 22 },
+        { header: 'Барабан', key: 'drum_number', width: 10 },
         { header: 'Сырьё', key: 'material_name', width: 30 },
         { header: 'Кол-во (кг)', key: 'quantity', width: 12 },
         { header: 'Комментарий', key: 'comment', width: 25 },
@@ -63,7 +64,7 @@ async function buildReportWorkbook(from, to) {
       sheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
 
       const materialRows = db.prepare(`
-        SELECT me.entry_date, me.employee_name,
+        SELECT me.entry_date, me.employee_name, me.drum_number,
                m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS material_name,
                me.quantity, me.comment, me.created_at
         FROM material_entries me
@@ -76,6 +77,7 @@ async function buildReportWorkbook(from, to) {
         sheet.addRow({
           entry_date: r.entry_date,
           employee_name: r.employee_name,
+          drum_number: r.drum_number || '',
           material_name: r.material_name,
           quantity: r.quantity,
           comment: r.comment || '',

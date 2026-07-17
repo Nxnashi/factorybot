@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS material_entries (
   employee_name TEXT NOT NULL,
   material_id   INTEGER NOT NULL,
   quantity      REAL NOT NULL,
+  drum_number   INTEGER,
   comment       TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (material_id) REFERENCES materials(id)
@@ -97,6 +98,12 @@ CREATE INDEX IF NOT EXISTS idx_material_entries_date_stage ON material_entries(e
 const nomCols = db.prepare("PRAGMA table_info(nomenclature)").all().map(c => c.name);
 if (!nomCols.includes('article')) {
   db.exec('ALTER TABLE nomenclature ADD COLUMN article TEXT');
+}
+
+// Миграция: номер барабана для расхода сырья по замесу
+const matEntryCols = db.prepare("PRAGMA table_info(material_entries)").all().map(c => c.name);
+if (!matEntryCols.includes('drum_number')) {
+  db.exec('ALTER TABLE material_entries ADD COLUMN drum_number INTEGER');
 }
 
 // Миграция: старый единый этап "Замес" (mixing) разделили на два — переносим всех,
