@@ -84,6 +84,25 @@ async function buildReportWorkbook(from, to) {
           created_at: r.created_at,
         });
       });
+
+      const batches = db.prepare(`
+        SELECT entry_date, employee_name, drum_number, output_quantity, status
+        FROM mixing_batches
+        WHERE stage = ? AND entry_date BETWEEN ? AND ?
+        ORDER BY entry_date, created_at
+      `).all(stage.code, from, to);
+
+      if (batches.length > 0) {
+        sheet.addRow([]);
+        const summaryHeaderRow = sheet.addRow(['Сводка по замесам', '', '', '', '', '', '']);
+        summaryHeaderRow.font = { bold: true };
+        const subHeaderRow = sheet.addRow(['Дата', 'Сотрудник', 'Барабан', 'Статус', 'Выход (кг)', '', '']);
+        subHeaderRow.eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
+        const STATUS_LABELS = { completed: 'Завершён', in_progress: 'В процессе', cancelled: 'Отменён' };
+        batches.forEach(b => {
+          sheet.addRow([b.entry_date, b.employee_name, b.drum_number, STATUS_LABELS[b.status] || b.status, b.output_quantity || '']);
+        });
+      }
       continue;
     }
 

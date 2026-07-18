@@ -519,9 +519,9 @@ async function renderShiftsTab(stages) {
       .map(stage => {
         const employees = byStage[stage.code];
 
-        // Итого по этапу — суммируем по номенклатуре(+сорт), фото в суммы не идут
+        // Итого по этапу — суммируем по номенклатуре(+сорт), фото и замесы в суммы не идут
         const stageTotals = {};
-        Object.values(employees).flat().filter(r => !r.is_photo).forEach(r => {
+        Object.values(employees).flat().filter(r => !r.is_photo && !String(r.id).startsWith('batch-')).forEach(r => {
           const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
           stageTotals[key] = (stageTotals[key] || 0) + r.quantity;
         });
@@ -536,6 +536,14 @@ async function renderShiftsTab(stages) {
                     <span class="entry-time">${r.created_at.slice(11, 16)}</span>
                     <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
                   </span>
+                </div>
+              `;
+            }
+            if (String(r.id).startsWith('batch-')) {
+              return `
+                <div class="item-line">
+                  <span>${r.nomenclature_name}${r.quantity != null ? ': ' + r.quantity + ' кг' : ''}</span>
+                  <span class="right"><span class="entry-time">${r.created_at.slice(11, 16)}</span></span>
                 </div>
               `;
             }

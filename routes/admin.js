@@ -142,7 +142,32 @@ router.get('/entries', (req, res) => {
     is_photo: 0,
   }));
 
-  res.json([...rows.map(r => ({ ...r, id: String(r.id) })), ...photoRows, ...materialRows]);
+  // Сами замесы — показываем выход (или статус "в процессе"), отдельной строкой на этапе
+  const batchRows = db.prepare(`
+    SELECT id, entry_date, stage, telegram_id, employee_name, drum_number, output_quantity, status, created_at
+    FROM mixing_batches
+    WHERE entry_date BETWEEN ? AND ?
+    ORDER BY stage, employee_name, created_at
+  `).all(from, to).map(b => ({
+    id: `batch-${b.id}`,
+    entry_date: b.entry_date,
+    stage: b.stage,
+    telegram_id: b.telegram_id,
+    employee_name: b.employee_name,
+    nomenclature_name: b.status === 'completed'
+      ? `🧪 Замес завершён (барабан ${b.drum_number}) — выход`
+      : b.status === 'cancelled'
+        ? `🧪 Замес отменён (барабан ${b.drum_number})`
+        : `🧪 Замес в процессе (барабан ${b.drum_number})`,
+    quantity: b.output_quantity,
+    grade: null,
+    drum_number: null,
+    comment: null,
+    created_at: b.created_at,
+    is_photo: 0,
+  }));
+
+  res.json([...rows.map(r => ({ ...r, id: String(r.id) })), ...photoRows, ...materialRows, ...batchRows]);
 });
 
 // Удалить запись (админ может удалить любую, за любую дату — для исправления ошибок задним числом)
@@ -230,6 +255,21 @@ router.get('/balance', (req, res) => {
   });
 
   res.json(result);
+});
+
+// --- Замесы (батчи) — на случай если рабочий забыл завершить и барабан "зависает" ---
+router.get('/mixing-batches', (req, res) => {
+  const { status } = req.query;
+  const rows = status
+    ? db.prepare('SELECT * FROM mixing_batches WHERE status = ? ORDER BY created_at DESC').all(status)
+    : db.prepare('SELECT * FROM mixing_batches ORDER BY created_at DESC LIMIT 100').all();
+  res.json(rows);
+});
+
+router.post('/mixing-batches/:id/cancel', (req, res) => {
+  const info = db.prepare("UPDATE mixing_batches SET status = 'cancelled' WHERE id = ? AND status = 'in_progress'").run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'not_found_or_not_in_progress' });
+  res.json({ ok: true });
 });
 
 // --- Номенклатура ---

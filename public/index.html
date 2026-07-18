@@ -22,7 +22,7 @@
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    padding-bottom: 100px;
+    padding-bottom: 160px;
   }
   header {
     padding: 18px 16px 14px;
@@ -64,6 +64,29 @@
     font-weight: 700;
     padding: 8px 14px;
     border-radius: 10px;
+  }
+  .batch-progress-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+  }
+  .batch-progress-card.empty {
+    color: var(--hint);
+    font-size: 13px;
+    text-align: center;
+    padding: 16px;
+  }
+  .batch-submit-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .submit-btn.secondary {
+    background: var(--surface);
+    color: var(--accent);
+    border: 1px solid var(--accent);
   }
   .picker-hint {
     font-size: 13px;
@@ -537,14 +560,43 @@ async function renderDrumPicker(me, stage) {
     </main>
   `;
   app.querySelectorAll('[data-drum]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      renderMaterialsForm(me, stage, Number(btn.dataset.drum));
-    });
+    btn.addEventListener('click', () => startBatch(me, stage, Number(btn.dataset.drum)));
   });
 }
 
-async function renderMaterialsForm(me, stage, drumNumber) {
+async function startBatch(me, stage, drumNumber) {
   const today = new Date().toISOString().slice(0, 10);
+  try {
+    const res = await fetch(`${API}/api/mixing-batch/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: today, stage: stage.code, drum_number: drumNumber }),
+    });
+    const data = await res.json();
+    if (data.error === 'day_closed') {
+      showToast('Этот день уже закрыт. Обратись к администратору.');
+      return;
+    }
+    renderMaterialsForm(me, stage, data.batch, data.materials);
+  } catch (e) {
+    showToast('Ошибка сети');
+  }
+}
+
+async function refreshBatch(me, stage) {
+  const res = await fetch(`${API}/api/mixing-batch/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: currentBatch.entry_date, stage: stage.code, drum_number: currentBatch.drum_number }),
+  });
+  const data = await res.json();
+  renderMaterialsForm(me, stage, data.batch, data.materials);
+}
+
+let currentBatch = null;
+
+async function renderMaterialsForm(me, stage, batch, alreadyAdded) {
+  currentBatch = batch;
   const materials = await (await fetch(`${API}/api/materials?stage=${stage.code}`)).json();
 
   const itemsHtml = materials.map(item => {
@@ -563,6 +615,15 @@ async function renderMaterialsForm(me, stage, drumNumber) {
     ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
     : '';
 
+  const alreadyAddedHtml = alreadyAdded.length > 0
+    ? `
+      <div class="batch-progress-card">
+        <div class="row2" style="margin-bottom:6px;">Уже добавлено в этот замес</div>
+        ${alreadyAdded.map(m => `<div class="item-line"><span>${m.material_name}</span><span>${m.quantity}</span></div>`).join('')}
+      </div>
+    `
+    : `<div class="batch-progress-card empty">Пока ничего не добавлено в этот замес</div>`;
+
   app.innerHTML = `
     <header>
       <div class="eyebrow">Учёт производства</div>
@@ -571,21 +632,18 @@ async function renderMaterialsForm(me, stage, drumNumber) {
     </header>
     <main>
       <div class="date-row">
-        <label>Дата смены</label>
-        <input type="date" id="entryDate" value="${today}" max="${today}">
-      </div>
-      <div class="date-row">
         <label>Барабан</label>
-        <button class="drum-change-btn" id="drumChangeBtn">Барабан ${drumNumber} · сменить</button>
+        <button class="drum-change-btn" id="drumChangeBtn">Барабан ${batch.drum_number} · сменить</button>
       </div>
+      ${alreadyAddedHtml}
       <div class="search-row">
         <input type="text" id="itemSearch" placeholder="🔍 Поиск по названию или артикулу" autocomplete="off">
       </div>
       <div id="itemsList">${itemsHtml}</div>
-      <div class="today-log" id="todayLog"></div>
     </main>
-    <div class="submit-bar">
-      <button class="submit-btn" id="submitBtn">Отправить данные</button>
+    <div class="submit-bar batch-submit-bar">
+      <button class="submit-btn secondary" id="addMaterialsBtn">Добавить сырьё в замес</button>
+      <button class="submit-btn" id="finishBatchBtn">Указать выход и завершить →</button>
     </div>
   `;
 
@@ -599,16 +657,15 @@ async function renderMaterialsForm(me, stage, drumNumber) {
     });
   });
 
-  document.getElementById('submitBtn').addEventListener('click', () => submitMaterials(me, stage, drumNumber));
+  document.getElementById('addMaterialsBtn').addEventListener('click', () => addMaterialsToBatch(me, stage));
+  document.getElementById('finishBatchBtn').addEventListener('click', () => renderBatchOutputForm(me, stage, batch, alreadyAdded));
+
   const switchBtn = document.getElementById('switchStageBtn');
   if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
-
-  loadToday(me.telegram_id);
 }
 
-async function submitMaterials(me, stage, drumNumber) {
-  const btn = document.getElementById('submitBtn');
-  const entryDate = document.getElementById('entryDate').value;
+async function addMaterialsToBatch(me, stage) {
+  const btn = document.getElementById('addMaterialsBtn');
   const cards = document.querySelectorAll('.item-card');
   const items = [];
 
@@ -625,20 +682,19 @@ async function submitMaterials(me, stage, drumNumber) {
   }
 
   btn.disabled = true;
-  btn.textContent = 'Отправка…';
+  btn.textContent = 'Сохранение…';
 
   try {
-    const res = await fetch(`${API}/api/submit-material`, {
+    const res = await fetch(`${API}/api/mixing-batch/add-materials`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, drum_number: drumNumber, items }),
+      body: JSON.stringify({ batch_id: currentBatch.id, telegram_id: me.telegram_id, items }),
     });
     const data = await res.json();
     if (data.ok) {
-      showToast(`Сохранено: ${data.saved} позиций`);
+      showToast(`Добавлено: ${data.saved} позиций`);
       tg?.HapticFeedback?.notificationOccurred('success');
-      document.querySelectorAll('input[type="number"]').forEach(i => i.value = '');
-      loadToday(me.telegram_id);
+      await refreshBatch(me, stage);
     } else if (data.error === 'day_closed') {
       showToast('Этот день уже закрыт. Обратись к администратору.');
     } else {
@@ -646,10 +702,69 @@ async function submitMaterials(me, stage, drumNumber) {
     }
   } catch (e) {
     showToast('Ошибка сети');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Отправить данные';
   }
+}
+
+function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
+  if (alreadyAdded.length === 0) {
+    showToast('Сначала добавь сырьё в замес');
+    return;
+  }
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
+      <div class="who">${me.full_name}</div>
+    </header>
+    <main>
+      <div class="batch-progress-card">
+        <div class="row2" style="margin-bottom:6px;">Внесено сырья в замес (барабан ${batch.drum_number})</div>
+        ${alreadyAdded.map(m => `<div class="item-line"><span>${m.material_name}</span><span>${m.quantity}</span></div>`).join('')}
+      </div>
+      <div class="photo-card">
+        <label style="display:block; margin-bottom:8px; color:var(--hint); font-size:13px;">Сколько фактически получилось на выходе? (кг)</label>
+        <input type="number" min="0" inputmode="numeric" id="outputQty" placeholder="Количество, кг" class="photo-caption-input">
+      </div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn" id="completeBatchBtn">Завершить замес</button>
+    </div>
+  `;
+
+  document.getElementById('completeBatchBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('completeBatchBtn');
+    const outputQty = Number(document.getElementById('outputQty').value || 0);
+    if (outputQty <= 0) {
+      showToast('Укажи количество на выходе');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Отправка…';
+    try {
+      const res = await fetch(`${API}/api/mixing-batch/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batch_id: batch.id, telegram_id: me.telegram_id, output_quantity: outputQty }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Замес завершён');
+        tg?.HapticFeedback?.notificationOccurred('success');
+        if (me.stages.length > 1) {
+          renderStagePicker(me);
+        } else {
+          renderDrumPicker(me, stage);
+        }
+      } else {
+        showToast('Ошибка: ' + (data.error || 'неизвестная'));
+      }
+    } catch (e) {
+      showToast('Ошибка сети');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Завершить замес';
+    }
+  });
 }
 
 async function loadTodayPhotos(telegramId) {

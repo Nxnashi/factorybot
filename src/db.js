@@ -77,6 +77,19 @@ CREATE TABLE IF NOT EXISTS materials (
   sort_order INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS mixing_batches (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date      TEXT NOT NULL,
+  stage           TEXT NOT NULL,
+  telegram_id     TEXT NOT NULL,
+  employee_name   TEXT NOT NULL,
+  drum_number     INTEGER NOT NULL,
+  output_quantity REAL,
+  status          TEXT NOT NULL DEFAULT 'in_progress', -- 'in_progress' | 'completed' | 'cancelled'
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS material_entries (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   entry_date    TEXT NOT NULL,
@@ -86,9 +99,11 @@ CREATE TABLE IF NOT EXISTS material_entries (
   material_id   INTEGER NOT NULL,
   quantity      REAL NOT NULL,
   drum_number   INTEGER,
+  batch_id      INTEGER,
   comment       TEXT,
   created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-  FOREIGN KEY (material_id) REFERENCES materials(id)
+  FOREIGN KEY (material_id) REFERENCES materials(id),
+  FOREIGN KEY (batch_id) REFERENCES mixing_batches(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_material_entries_date_stage ON material_entries(entry_date, stage);
@@ -104,6 +119,9 @@ if (!nomCols.includes('article')) {
 const matEntryCols = db.prepare("PRAGMA table_info(material_entries)").all().map(c => c.name);
 if (!matEntryCols.includes('drum_number')) {
   db.exec('ALTER TABLE material_entries ADD COLUMN drum_number INTEGER');
+}
+if (!matEntryCols.includes('batch_id')) {
+  db.exec('ALTER TABLE material_entries ADD COLUMN batch_id INTEGER');
 }
 
 // Миграция: старый единый этап "Замес" (mixing) разделили на два — переносим всех,
