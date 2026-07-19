@@ -353,6 +353,7 @@ function render(stages) {
       <div class="tab active" data-tab="shifts">Смены</div>
       <div class="tab" data-tab="balance">Баланс</div>
       <div class="tab" data-tab="users">Сотрудники</div>
+      <div class="tab" data-tab="roster">Ростер цехов</div>
       <div class="tab" data-tab="nom">Номенклатура</div>
       <div class="tab" data-tab="materials">Сырьё</div>
       <div class="tab" data-tab="export">Экспорт</div>
@@ -360,6 +361,7 @@ function render(stages) {
     <section class="active" id="tab-shifts"></section>
     <section id="tab-balance"></section>
     <section id="tab-users"></section>
+    <section id="tab-roster"></section>
     <section id="tab-nom"></section>
     <section id="tab-materials"></section>
     <section id="tab-export"></section>
@@ -377,6 +379,7 @@ function render(stages) {
   renderShiftsTab(stages);
   renderBalanceTab(stages);
   renderUsersTab(stages);
+  renderRosterTab(stages);
   renderNomTab();
   renderMaterialsTab();
   renderExportTab();
@@ -512,7 +515,7 @@ async function renderShiftsTab(stages) {
       byStage[r.stage][r.employee_name].push(r);
     }
 
-    const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', '3': 'Сорт 3', brak: 'Брак' };
+    const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', brak: 'Брак', good: 'Годно', return: 'Возврат' };
 
     const html = stages
       .filter(s => byStage[s.code])
@@ -549,7 +552,7 @@ async function renderShiftsTab(stages) {
             }
             return `
               <div class="item-line" data-entry-id="${r.id}">
-                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}${r.drum_number ? ` (барабан ${r.drum_number})` : ''}</span>
+                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}${r.drum_number ? ` (барабан ${r.drum_number})` : ''}${r.entered_by ? ` <span class="entry-time">· внёс: ${r.entered_by}</span>` : ''}</span>
                 <span class="right">
                   <span class="entry-time">${r.created_at.slice(11, 16)}</span>
                   <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
@@ -707,6 +710,92 @@ async function renderUsersTab(stages) {
     btn.addEventListener('click', async () => {
       await fetch(`/api/admin/users/${btn.dataset.delUser}`, { method: 'DELETE', headers: authHeaders() });
       renderUsersTab(stages);
+    });
+  });
+}
+
+// --- Ростер сотрудников по цехам (не имеют доступа в бот — вносит за них старший) ---
+async function renderRosterTab(stages) {
+  const el = document.getElementById('tab-roster');
+  const rosterStageCodes = stages.filter(s => s.formType === 'quantity').map(s => s.code);
+
+  const employees = await (await fetch('/api/admin/employees', { headers: authHeaders() })).json();
+  const today = new Date().toISOString().slice(0, 10);
+  const openShifts = await (await fetch(`/api/admin/shifts?status=open&date_from=${today}&date_to=${today}`, { headers: authHeaders() })).json();
+
+  const stageTitle = code => stages.find(s => s.code === code)?.title || code;
+
+  el.innerHTML = `
+    <form class="inline" id="empForm">
+      <label>Имя сотрудника</label>
+      <input name="full_name" required placeholder="Например: Вовчик">
+      <label>Этап (цех)</label>
+      <select name="stage">
+        ${rosterStageCodes.map(code => `<option value="${code}">${stageTitle(code)}</option>`).join('')}
+      </select>
+      <button type="submit">Добавить сотрудника</button>
+    </form>
+
+    ${openShifts.length > 0 ? `
+      <div class="card">
+        <div class="row1">Открытые смены сегодня (${openShifts.length})</div>
+        <div class="row2" style="margin-bottom:8px;">Если старший забыл закрыть смену — можно закрыть силой</div>
+        ${openShifts.map(s => `
+          <div class="item-line">
+            <span>${stageTitle(s.stage)} · открыл в ${s.opened_at.slice(11, 16)}</span>
+            <button data-force-close="${s.id}" style="font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid #b3372c; color:#b3372c; background:none;">Закрыть силой</button>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    <div id="empList">
+      ${rosterStageCodes.map(code => {
+        const stageEmployees = employees.filter(e => e.stage === code);
+        if (stageEmployees.length === 0) return '';
+        return `
+          <div class="card">
+            <div class="row1">${stageTitle(code)}</div>
+            ${stageEmployees.map(e => `
+              <div class="item-line">
+                <span>${e.full_name} ${e.active ? '' : '(скрыт)'}</span>
+                <button data-toggle-emp="${e.id}" data-active="${e.active}" style="font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg);">${e.active ? 'Скрыть' : 'Показать'}</button>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  el.querySelector('#empForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await fetch('/api/admin/employees', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ full_name: fd.get('full_name'), stage: fd.get('stage') }),
+    });
+    renderRosterTab(stages);
+  });
+
+  el.querySelectorAll('[data-toggle-emp]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const active = btn.dataset.active === '1';
+      await fetch(`/api/admin/employees/${btn.dataset.toggleEmp}`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ active: !active }),
+      });
+      renderRosterTab(stages);
+    });
+  });
+
+  el.querySelectorAll('[data-force-close]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Закрыть эту смену силой? Старший больше не сможет вносить данные по ней.')) return;
+      await fetch(`/api/admin/shifts/${btn.dataset.forceClose}/force-close`, { method: 'POST', headers: authHeaders() });
+      renderRosterTab(stages);
     });
   });
 }

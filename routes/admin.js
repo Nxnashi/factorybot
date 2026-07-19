@@ -89,7 +89,7 @@ router.get('/entries', (req, res) => {
   const to = date_to || from;
 
   const rows = db.prepare(`
-    SELECT e.id, e.entry_date, e.stage, e.telegram_id, e.employee_name,
+    SELECT e.id, e.entry_date, e.stage, e.telegram_id, e.employee_name, e.entered_by,
            n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
            e.quantity, e.grade, e.comment, e.created_at, 0 AS is_photo
     FROM entries e
@@ -227,11 +227,15 @@ router.get('/balance', (req, res) => {
       grades: data.stageGrades[code] || null,
     }));
 
-    // "Годные" на QC-этапах = всё кроме брака — нужно для сверки с соседними этапами
+    // "Годные" на этапах с разбивкой по статусам — сумма по кодам с countsAsGood=true
+    // (например на QC промежуточном "Возврат" не считается потерей — уходит в переработку)
+    const stageMetaByCode = code => STAGES.find(s => s.code === code);
     const goodAt = (code) => {
       const grades = data.stageGrades[code];
       if (!grades) return data.stageTotals[code] || 0;
-      return Object.entries(grades).reduce((sum, [g, q]) => sum + (g === 'brak' ? 0 : q), 0);
+      const meta = stageMetaByCode(code);
+      const goodCodes = new Set((meta && meta.gradeOptions ? meta.gradeOptions : []).filter(g => g.countsAsGood).map(g => g.code));
+      return Object.entries(grades).reduce((sum, [g, q]) => sum + (goodCodes.has(g) ? q : 0), 0);
     };
 
     // Расхождения только по цепочке поштучного учёта (без замеса)
@@ -269,6 +273,52 @@ router.get('/mixing-batches', (req, res) => {
 router.post('/mixing-batches/:id/cancel', (req, res) => {
   const info = db.prepare("UPDATE mixing_batches SET status = 'cancelled' WHERE id = ? AND status = 'in_progress'").run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not_found_or_not_in_progress' });
+  res.json({ ok: true });
+});
+
+// --- Ростер сотрудников по этапам (не имеют доступа в бот — вносит за них старший) ---
+router.get('/employees', (req, res) => {
+  const { stage } = req.query;
+  const rows = stage
+    ? db.prepare('SELECT * FROM employees WHERE stage = ? ORDER BY full_name').all(stage)
+    : db.prepare('SELECT * FROM employees ORDER BY stage, full_name').all();
+  res.json(rows);
+});
+
+router.post('/employees', (req, res) => {
+  const { full_name, stage } = req.body;
+  if (!full_name || !stage) return res.status(400).json({ error: 'bad_request' });
+  if (!STAGES.find(s => s.code === stage)) return res.status(400).json({ error: 'unknown_stage' });
+  const info = db.prepare('INSERT INTO employees (full_name, stage) VALUES (?, ?)').run(full_name, stage);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+router.put('/employees/:id', (req, res) => {
+  const { full_name, active } = req.body;
+  db.prepare('UPDATE employees SET full_name = COALESCE(?, full_name), active = COALESCE(?, active) WHERE id = ?')
+    .run(full_name ?? null, active === undefined ? null : (active ? 1 : 0), req.params.id);
+  res.json({ ok: true });
+});
+
+router.delete('/employees/:id', (req, res) => {
+  db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+// --- Смены старших — оверсайт на случай если кто-то забыл закрыть смену ---
+router.get('/shifts', (req, res) => {
+  const { status, date_from, date_to } = req.query;
+  const from = date_from || new Date().toISOString().slice(0, 10);
+  const to = date_to || from;
+  const rows = status
+    ? db.prepare('SELECT * FROM foreman_shifts WHERE status = ? AND entry_date BETWEEN ? AND ? ORDER BY opened_at DESC').all(status, from, to)
+    : db.prepare('SELECT * FROM foreman_shifts WHERE entry_date BETWEEN ? AND ? ORDER BY opened_at DESC').all(from, to);
+  res.json(rows);
+});
+
+router.post('/shifts/:id/force-close', (req, res) => {
+  const info = db.prepare("UPDATE foreman_shifts SET status = 'closed', closed_at = datetime('now') WHERE id = ? AND status = 'open'").run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: 'not_found_or_not_open' });
   res.json({ ok: true });
 });
 

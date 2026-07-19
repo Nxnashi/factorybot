@@ -1,7 +1,7 @@
 const ExcelJS = require('exceljs');
 const { db, STAGES } = require('./db');
 
-const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', '3': 'Сорт 3', brak: 'Брак' };
+const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', brak: 'Брак', good: 'Годно', return: 'Возврат' };
 
 async function buildReportWorkbook(from, to) {
   const workbook = new ExcelJS.Workbook();
@@ -15,6 +15,7 @@ async function buildReportWorkbook(from, to) {
     { header: 'Дата', key: 'entry_date', width: 12 },
     { header: 'Этап', key: 'stage_title', width: 28 },
     { header: 'Сотрудник', key: 'employee_name', width: 22 },
+    { header: 'Старший', key: 'entered_by', width: 20 },
     { header: 'Номенклатура', key: 'nomenclature_name', width: 20 },
     { header: 'Кол-во', key: 'quantity', width: 10 },
     { header: 'Сорт', key: 'grade_label', width: 12 },
@@ -26,7 +27,7 @@ async function buildReportWorkbook(from, to) {
   const stageTitleByCode = Object.fromEntries(STAGES.map(s => [s.code, s.title]));
 
   const allRows = db.prepare(`
-    SELECT e.entry_date, e.stage, e.employee_name,
+    SELECT e.entry_date, e.stage, e.employee_name, e.entered_by,
            n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
            e.quantity, e.grade, e.comment, e.created_at
     FROM entries e
@@ -40,6 +41,7 @@ async function buildReportWorkbook(from, to) {
       entry_date: r.entry_date,
       stage_title: stageTitleByCode[r.stage] || r.stage,
       employee_name: r.employee_name,
+      entered_by: r.entered_by || '',
       nomenclature_name: r.nomenclature_name,
       quantity: r.quantity,
       grade_label: r.grade ? (GRADE_LABELS[r.grade] || r.grade) : '',
@@ -136,6 +138,7 @@ async function buildReportWorkbook(from, to) {
     sheet.columns = [
       { header: 'Дата', key: 'entry_date', width: 12 },
       { header: 'Сотрудник', key: 'employee_name', width: 22 },
+      { header: 'Старший', key: 'entered_by', width: 20 },
       { header: 'Номенклатура', key: 'nomenclature_name', width: 20 },
       { header: 'Кол-во', key: 'quantity', width: 10 },
       ...(stage.needsGrade ? [{ header: 'Сорт', key: 'grade_label', width: 12 }] : []),
@@ -149,6 +152,7 @@ async function buildReportWorkbook(from, to) {
       sheet.addRow({
         entry_date: r.entry_date,
         employee_name: r.employee_name,
+        entered_by: r.entered_by || '',
         nomenclature_name: r.nomenclature_name,
         quantity: r.quantity,
         grade_label: r.grade ? (GRADE_LABELS[r.grade] || r.grade) : '',

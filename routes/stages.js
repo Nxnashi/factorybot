@@ -1,6 +1,6 @@
 const express = require('express');
 const multer = require('multer');
-const { db, STAGES } = require('../src/db');
+const { db, STAGES, ROSTER_STAGES } = require('../src/db');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -28,6 +28,8 @@ router.get('/me/:telegramId', (req, res) => {
       title: meta ? meta.title : code,
       needs_grade: meta ? meta.needsGrade : false,
       form_type: meta ? meta.formType : 'quantity',
+      grade_options: meta ? meta.gradeOptions : null,
+      is_roster_stage: ROSTER_STAGES.includes(code),
     };
   });
   res.json({
@@ -283,10 +285,83 @@ router.post('/submit-material', (req, res) => {
   res.json({ ok: true, saved: rows.length });
 });
 
+// --- Ростер и смена старшего (для этапов из ROSTER_STAGES) ---
+
+// Состав ростера на этапе (активные сотрудники, которых можно выбрать в смену)
+router.get('/roster', (req, res) => {
+  const { stage } = req.query;
+  if (!stage) return res.status(400).json({ error: 'bad_request' });
+  const rows = db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 ORDER BY full_name').all(stage);
+  res.json(rows);
+});
+
+// Текущая смена старшего на этапе за сегодня (открытая или последняя закрытая) — null, если ещё не открывал
+router.get('/shift-status', (req, res) => {
+  const { telegram_id, stage, entry_date } = req.query;
+  if (!telegram_id || !stage || !entry_date) return res.status(400).json({ error: 'bad_request' });
+
+  const shift = db.prepare(`
+    SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? ORDER BY id DESC LIMIT 1
+  `).get(telegram_id, stage, entry_date);
+
+  if (!shift) return res.json({ shift: null, employees: [] });
+
+  const employeeIds = shift.employee_ids.split(',').map(Number);
+  const employees = employeeIds.length > 0
+    ? db.prepare(`SELECT id, full_name FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`).all(...employeeIds)
+    : [];
+
+  res.json({ shift, employees });
+});
+
+// Открыть смену — выбрать состав сотрудников на сегодня для этого этапа
+router.post('/shift/open', (req, res) => {
+  const { telegram_id, entry_date, stage, employee_ids } = req.body;
+  if (!telegram_id || !entry_date || !stage || !Array.isArray(employee_ids) || employee_ids.length === 0) {
+    return res.status(400).json({ error: 'bad_request' });
+  }
+  if (!ROSTER_STAGES.includes(stage)) return res.status(400).json({ error: 'bad_stage' });
+
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
+  if (!user) return res.status(404).json({ error: 'not_registered' });
+  if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
+
+  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
+  if (closedDay) return res.status(403).json({ error: 'day_closed' });
+
+  const existingOpen = db.prepare(`
+    SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? AND status = 'open'
+  `).get(telegram_id, stage, entry_date);
+  if (existingOpen) return res.status(409).json({ error: 'already_open', shift: existingOpen });
+
+  const info = db.prepare(`
+    INSERT INTO foreman_shifts (telegram_id, stage, entry_date, employee_ids) VALUES (?, ?, ?, ?)
+  `).run(telegram_id, stage, entry_date, employee_ids.join(','));
+
+  const shift = db.prepare('SELECT * FROM foreman_shifts WHERE id = ?').get(info.lastInsertRowid);
+  res.json({ ok: true, shift });
+});
+
+// Закрыть смену — после этого нельзя вносить новые записи от имени этой смены
+router.post('/shift/close', (req, res) => {
+  const { telegram_id, shift_id } = req.body;
+  if (!telegram_id || !shift_id) return res.status(400).json({ error: 'bad_request' });
+
+  const shift = db.prepare('SELECT * FROM foreman_shifts WHERE id = ?').get(shift_id);
+  if (!shift) return res.status(404).json({ error: 'not_found' });
+  if (shift.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
+  if (shift.status !== 'open') return res.status(403).json({ error: 'already_closed' });
+
+  db.prepare("UPDATE foreman_shifts SET status = 'closed', closed_at = datetime('now') WHERE id = ?").run(shift_id);
+  res.json({ ok: true });
+});
+
 // Отправка партии записей за один сабмит формы
-// body: { telegram_id, entry_date, stage, items: [{ nomenclature_id, quantity, grade?, comment? }] }
+// body: { telegram_id, entry_date, stage, employee_id?, items: [{ nomenclature_id, quantity, grade?, comment? }] }
+// Для этапов из ROSTER_STAGES employee_id обязателен — запись идёт на конкретного сотрудника смены,
+// а не на самого старшего (который выступает просто оператором ввода)
 router.post('/submit', (req, res) => {
-  const { telegram_id, entry_date, stage, items } = req.body;
+  const { telegram_id, entry_date, stage, employee_id, items } = req.body;
 
   if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'bad_request' });
@@ -307,11 +382,37 @@ router.post('/submit', (req, res) => {
     return res.status(403).json({ error: 'stage_not_allowed' });
   }
 
+  let employeeName = user.full_name;
+  let enteredBy = null;
+  let resolvedEmployeeId = null;
+
+  if (ROSTER_STAGES.includes(stage)) {
+    if (!employee_id) return res.status(400).json({ error: 'employee_required' });
+
+    const shift = db.prepare(`
+      SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? AND status = 'open'
+      ORDER BY id DESC LIMIT 1
+    `).get(telegram_id, stage, entry_date);
+    if (!shift) return res.status(403).json({ error: 'shift_not_open' });
+
+    const shiftEmployeeIds = shift.employee_ids.split(',').map(Number);
+    if (!shiftEmployeeIds.includes(Number(employee_id))) {
+      return res.status(403).json({ error: 'employee_not_in_shift' });
+    }
+
+    const employee = db.prepare('SELECT * FROM employees WHERE id = ?').get(employee_id);
+    if (!employee) return res.status(404).json({ error: 'employee_not_found' });
+
+    employeeName = employee.full_name;
+    enteredBy = user.full_name;
+    resolvedEmployeeId = employee.id;
+  }
+
   const stageMeta = getStageMeta(stage);
 
   const insert = db.prepare(`
-    INSERT INTO entries (entry_date, stage, telegram_id, employee_name, nomenclature_id, quantity, grade, comment)
-    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @nomenclature_id, @quantity, @grade, @comment)
+    INSERT INTO entries (entry_date, stage, telegram_id, employee_name, employee_id, entered_by, nomenclature_id, quantity, grade, comment)
+    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @employee_id, @entered_by, @nomenclature_id, @quantity, @grade, @comment)
   `);
 
   const insertMany = db.transaction((rows) => {
@@ -324,7 +425,9 @@ router.post('/submit', (req, res) => {
       entry_date,
       stage,
       telegram_id: user.telegram_id,
-      employee_name: user.full_name,
+      employee_name: employeeName,
+      employee_id: resolvedEmployeeId,
+      entered_by: enteredBy,
       nomenclature_id: it.nomenclature_id,
       quantity: Number(it.quantity),
       grade: stageMeta && stageMeta.needsGrade ? (it.grade || null) : null,
@@ -370,7 +473,7 @@ router.get('/today/:telegramId', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
 
   const rows = db.prepare(`
-    SELECT e.id, e.stage, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
+    SELECT e.id, e.stage, e.employee_name, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.telegram_id = ? AND e.entry_date = ?

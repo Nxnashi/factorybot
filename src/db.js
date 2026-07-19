@@ -6,17 +6,42 @@ db.pragma('journal_mode = WAL');
 
 // Этапы производства (фиксированный список, порядок важен для отчёта)
 // formType: 'quantity' — номенклатура готовой продукции, 'photo' — фото документа, 'materials' — сырьё (ТМЦ)
+// gradeOptions — если задано, на этапе вместо простого количества показывается разбивка по этим статусам.
+//   countsAsGood: false — статус не считается потерей в "Балансе" (напр. "Возврат" уходит в переработку, а не теряется)
 const STAGES = [
-  { code: 'intake', title: 'Приход ТМЦ', needsGrade: false, formType: 'photo' },
-  { code: 'clay_mixing', title: 'Замес глины', needsGrade: false, formType: 'materials' },
-  { code: 'glaze_mixing', title: 'Замес глазури', needsGrade: false, formType: 'materials' },
-  { code: 'molding', title: 'Формовочный цех', needsGrade: false, formType: 'quantity' },
-  { code: 'qc_molding', title: 'QC промежуточный контроль качества', needsGrade: true, formType: 'quantity' },
-  { code: 'glazing', title: 'Глазировка', needsGrade: false, formType: 'quantity' },
-  { code: 'kiln', title: 'Печь', needsGrade: false, formType: 'quantity' },
-  { code: 'breakage', title: 'Учёт боя после закаливания', needsGrade: false, formType: 'quantity' },
-  { code: 'qc_final', title: 'Участок сортировки', needsGrade: true, formType: 'quantity' },
+  { code: 'intake', title: 'Приход ТМЦ', needsGrade: false, formType: 'photo', gradeOptions: null },
+  { code: 'clay_mixing', title: 'Замес глины', needsGrade: false, formType: 'materials', gradeOptions: null },
+  { code: 'glaze_mixing', title: 'Замес глазури', needsGrade: false, formType: 'materials', gradeOptions: null },
+  { code: 'molding', title: 'Формовочный цех', needsGrade: false, formType: 'quantity', gradeOptions: null },
+  {
+    code: 'qc_molding',
+    title: 'QC промежуточный контроль качества',
+    needsGrade: true,
+    formType: 'quantity',
+    gradeOptions: [
+      { code: 'good', label: 'Годно', countsAsGood: true },
+      { code: 'return', label: 'Возврат', countsAsGood: false },
+    ],
+  },
+  { code: 'glazing', title: 'Глазировка', needsGrade: false, formType: 'quantity', gradeOptions: null },
+  { code: 'kiln', title: 'Печь', needsGrade: false, formType: 'quantity', gradeOptions: null },
+  { code: 'breakage', title: 'Учёт боя после закаливания', needsGrade: false, formType: 'quantity', gradeOptions: null },
+  {
+    code: 'qc_final',
+    title: 'Участок сортировки',
+    needsGrade: true,
+    formType: 'quantity',
+    gradeOptions: [
+      { code: '1', label: 'Сорт 1', countsAsGood: true },
+      { code: '2', label: 'Сорт 2', countsAsGood: true },
+      { code: 'brak', label: 'Брак', countsAsGood: false },
+    ],
+  },
 ];
+
+// Этапы, где введена система "старший + состав смены": старший сначала набирает
+// состав смены (кто сегодня работает), потом вносит выработку за каждого сотрудника отдельно
+const ROSTER_STAGES = ['molding', 'qc_molding', 'glazing', 'kiln', 'breakage', 'qc_final'];
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -40,11 +65,13 @@ CREATE TABLE IF NOT EXISTS entries (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   entry_date      TEXT NOT NULL,        -- YYYY-MM-DD
   stage           TEXT NOT NULL,
-  telegram_id     TEXT NOT NULL,
-  employee_name   TEXT NOT NULL,
+  telegram_id     TEXT NOT NULL,        -- кто внёс (старший)
+  employee_name   TEXT NOT NULL,        -- кто фактически выполнил работу
+  employee_id     INTEGER,              -- ссылка на employees(id), если это ростер-сотрудник
+  entered_by      TEXT,                 -- имя старшего, внёсшего запись (аудит)
   nomenclature_id INTEGER NOT NULL,
   quantity        REAL NOT NULL,
-  grade           TEXT,                 -- '1','2','3','brak' или NULL
+  grade           TEXT,                 -- код из gradeOptions этапа, либо NULL
   comment         TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (nomenclature_id) REFERENCES nomenclature(id)
@@ -107,6 +134,29 @@ CREATE TABLE IF NOT EXISTS material_entries (
 );
 
 CREATE INDEX IF NOT EXISTS idx_material_entries_date_stage ON material_entries(entry_date, stage);
+
+-- Ростер сотрудников по этапам (не имеют своего доступа в бот — только старший вносит за них)
+CREATE TABLE IF NOT EXISTS employees (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  full_name  TEXT NOT NULL,
+  stage      TEXT NOT NULL,
+  active     INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Личная смена старшего на этапе: открывается перед началом работы, закрывается по завершению
+CREATE TABLE IF NOT EXISTS foreman_shifts (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  telegram_id   TEXT NOT NULL,
+  stage         TEXT NOT NULL,
+  entry_date    TEXT NOT NULL,
+  employee_ids  TEXT NOT NULL,                 -- через запятую — состав смены, выбранный при открытии
+  status        TEXT NOT NULL DEFAULT 'open',  -- 'open' | 'closed'
+  opened_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  closed_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_foreman_shifts_lookup ON foreman_shifts(telegram_id, stage, entry_date);
 `);
 
 // Миграция: если база создана до появления поля article — добавляем колонку
@@ -122,6 +172,15 @@ if (!matEntryCols.includes('drum_number')) {
 }
 if (!matEntryCols.includes('batch_id')) {
   db.exec('ALTER TABLE material_entries ADD COLUMN batch_id INTEGER');
+}
+
+// Миграция: старший/ростер-сотрудник в entries
+const entryCols = db.prepare("PRAGMA table_info(entries)").all().map(c => c.name);
+if (!entryCols.includes('employee_id')) {
+  db.exec('ALTER TABLE entries ADD COLUMN employee_id INTEGER');
+}
+if (!entryCols.includes('entered_by')) {
+  db.exec('ALTER TABLE entries ADD COLUMN entered_by TEXT');
 }
 
 // Миграция: старый единый этап "Замес" (mixing) разделили на два — переносим всех,
@@ -250,4 +309,4 @@ for (const m of MATERIALS_CATALOG) {
   nextMatOrder++;
 }
 
-module.exports = { db, STAGES };
+module.exports = { db, STAGES, ROSTER_STAGES };

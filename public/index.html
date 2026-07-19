@@ -319,6 +319,18 @@
     color: var(--text);
     font-size: 15px;
   }
+  .roster-check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    margin-bottom: 8px;
+    font-size: 15px;
+  }
+  .roster-check-item input { width: 18px; height: 18px; }
 </style>
 </head>
 <body>
@@ -373,13 +385,6 @@ function getTelegramId() {
   return params.get('tid');
 }
 
-const GRADES = [
-  { code: '1', label: 'Сорт 1' },
-  { code: '2', label: 'Сорт 2' },
-  { code: '3', label: 'Сорт 3' },
-  { code: 'brak', label: 'Брак' },
-];
-
 let currentMe = null;
 let currentStage = null;
 let currentNomenclature = null;
@@ -417,8 +422,10 @@ async function init() {
       renderPhotoForm(me, currentStage);
     } else if (currentStage.form_type === 'materials') {
       renderDrumPicker(me, currentStage);
+    } else if (currentStage.is_roster_stage) {
+      renderShiftGate(me, currentStage);
     } else {
-      renderForm(me, currentStage, currentNomenclature);
+      renderForm(me, currentStage, currentNomenclature, null, null);
       loadToday(telegramId);
     }
   } else {
@@ -448,12 +455,167 @@ function renderStagePicker(me) {
         renderPhotoForm(me, stage);
       } else if (stage.form_type === 'materials') {
         renderDrumPicker(me, stage);
+      } else if (stage.is_roster_stage) {
+        renderShiftGate(me, stage);
       } else {
-        renderForm(me, stage, currentNomenclature);
+        renderForm(me, stage, currentNomenclature, null, null);
         loadToday(me.telegram_id);
       }
     });
   });
+}
+
+// --- Смена старшего (для ROSTER_STAGES): проверяем статус, ведём либо на открытие, либо на список сотрудников ---
+async function renderShiftGate(me, stage) {
+  const today = new Date().toISOString().slice(0, 10);
+  app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+  const res = await fetch(`${API}/api/shift-status?telegram_id=${me.telegram_id}&stage=${stage.code}&entry_date=${today}`);
+  const data = await res.json();
+
+  if (!data.shift || data.shift.status !== 'open') {
+    renderOpenShiftScreen(me, stage);
+  } else {
+    renderEmployeePicker(me, stage, data.shift, data.employees);
+  }
+}
+
+async function renderOpenShiftScreen(me, stage) {
+  const roster = await (await fetch(`${API}/api/roster?stage=${stage.code}`)).json();
+  const switchLink = me.stages.length > 1
+    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
+    : '';
+
+  if (roster.length === 0) {
+    app.innerHTML = `
+      <header>
+        <div class="eyebrow">Учёт производства</div>
+        <h1>${stage.title}</h1>
+        <div class="who">${me.full_name} ${switchLink}</div>
+      </header>
+      <div class="state-screen">На этом этапе пока нет ни одного сотрудника в ростере.<br>Обратись к администратору, чтобы добавил состав цеха.</div>
+    `;
+    const switchBtn = document.getElementById('switchStageBtn');
+    if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+    return;
+  }
+
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
+      <div class="who">${me.full_name} ${switchLink}</div>
+    </header>
+    <main>
+      <div class="picker-hint">Смена ещё не открыта. Выбери, кто сегодня работает на этом участке, и открой смену.</div>
+      <div id="rosterList">
+        ${roster.map(e => `
+          <label class="roster-check-item">
+            <input type="checkbox" value="${e.id}"> ${e.full_name}
+          </label>
+        `).join('')}
+      </div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn" id="openShiftBtn">Открыть смену</button>
+    </div>
+  `;
+
+  document.getElementById('openShiftBtn').addEventListener('click', async () => {
+    const checked = Array.from(document.querySelectorAll('#rosterList input:checked')).map(i => Number(i.value));
+    if (checked.length === 0) {
+      showToast('Выбери хотя бы одного сотрудника');
+      return;
+    }
+    const names = roster.filter(e => checked.includes(e.id)).map(e => e.full_name).join(', ');
+    if (!confirm(`Открыть смену на этапе «${stage.title}»?\n\nСостав: ${names}\n\nПосле открытия состав сменить нельзя — только закрыть смену и открыть новую.`)) {
+      return;
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    try {
+      const res = await fetch(`${API}/api/shift/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: today, stage: stage.code, employee_ids: checked }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Смена открыта');
+        tg?.HapticFeedback?.notificationOccurred('success');
+        renderEmployeePicker(me, stage, data.shift, roster.filter(e => checked.includes(e.id)));
+      } else if (data.error === 'day_closed') {
+        showToast('Этот день уже закрыт. Обратись к администратору.');
+      } else if (data.error === 'already_open') {
+        renderShiftGate(me, stage);
+      } else {
+        showToast('Ошибка при открытии смены');
+      }
+    } catch (e) {
+      showToast('Ошибка сети');
+    }
+  });
+
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+}
+
+function renderEmployeePicker(me, stage, shift, employees) {
+  const switchLink = me.stages.length > 1
+    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
+    : '';
+
+  app.innerHTML = `
+    <header>
+      <div class="eyebrow">Учёт производства</div>
+      <h1>${stage.title}</h1>
+      <div class="who">${me.full_name} ${switchLink}</div>
+    </header>
+    <main>
+      <div class="picker-hint">Смена открыта. Выбери сотрудника, чтобы внести его выработку.</div>
+      ${employees.map(e => `
+        <button class="stage-pick-btn" data-emp-id="${e.id}" data-emp-name="${e.full_name}">${e.full_name}</button>
+      `).join('')}
+      <div class="today-log" id="todayLog"></div>
+    </main>
+    <div class="submit-bar">
+      <button class="submit-btn secondary" id="closeShiftBtn">Закрыть смену</button>
+    </div>
+  `;
+
+  app.querySelectorAll('[data-emp-id]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      renderForm(me, stage, currentNomenclature, Number(btn.dataset.empId), btn.dataset.empName, shift);
+    });
+  });
+
+  document.getElementById('closeShiftBtn').addEventListener('click', () => {
+    if (!confirm(`Закрыть смену на этапе «${stage.title}»?\n\nПосле закрытия внести данные за сегодня на этом этапе будет нельзя.`)) {
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/shift/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ telegram_id: me.telegram_id, shift_id: shift.id }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          showToast('Смена закрыта');
+          tg?.HapticFeedback?.notificationOccurred('success');
+          if (me.stages.length > 1) renderStagePicker(me); else renderShiftGate(me, stage);
+        } else {
+          showToast('Не удалось закрыть смену');
+        }
+      } catch (e) {
+        showToast('Ошибка сети');
+      }
+    })();
+  });
+
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+
+  loadToday(me.telegram_id);
 }
 
 function renderPhotoForm(me, stage) {
@@ -787,18 +949,19 @@ async function loadTodayPhotos(telegramId) {
   `;
 }
 
-function renderForm(me, stage, nomenclature) {
+function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
   const today = new Date().toISOString().slice(0, 10);
+  const gradeOptions = stage.grade_options;
 
   const itemsHtml = nomenclature.map(item => {
     const searchText = (item.name + ' ' + (item.article || '')).toLowerCase();
-    if (stage.needs_grade) {
+    if (gradeOptions && gradeOptions.length > 0) {
       return `
         <div class="item-card" data-id="${item.id}" data-grade="true" data-search="${searchText}">
           <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
-          <div class="grade-grid">
-            ${GRADES.map(g => `
-              <div class="grade-cell ${g.code === 'brak' ? 'brak' : ''}">
+          <div class="grade-grid" style="grid-template-columns: repeat(${gradeOptions.length}, 1fr);">
+            ${gradeOptions.map(g => `
+              <div class="grade-cell ${g.countsAsGood === false ? 'brak' : ''}">
                 <label>${g.label}</label>
                 <input type="number" min="0" inputmode="numeric" data-grade-code="${g.code}" placeholder="0">
               </div>
@@ -817,15 +980,16 @@ function renderForm(me, stage, nomenclature) {
     `;
   }).join('');
 
-  const switchLink = me.stages.length > 1
-    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
-    : '';
+  const isRoster = !!employeeId;
+  const backBtn = isRoster
+    ? `<button class="switch-stage-btn" id="backToEmployeesBtn">← К списку сотрудников</button>`
+    : (me.stages.length > 1 ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>` : '');
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">Учёт производства</div>
+      <div class="eyebrow">${isRoster ? `Вносишь за: ${employeeName}` : 'Учёт производства'}</div>
       <h1>${stage.title}</h1>
-      <div class="who">${me.full_name} ${switchLink}</div>
+      <div class="who">${me.full_name} ${backBtn}</div>
     </header>
     <main>
       <div class="date-row">
@@ -839,7 +1003,7 @@ function renderForm(me, stage, nomenclature) {
       <div class="today-log" id="todayLog"></div>
     </main>
     <div class="submit-bar">
-      <button class="submit-btn" id="submitBtn">Отправить данные</button>
+      <button class="submit-btn" id="submitBtn">Сохранить${isRoster ? ` за ${employeeName}` : ''}</button>
     </div>
   `;
 
@@ -851,12 +1015,16 @@ function renderForm(me, stage, nomenclature) {
     });
   });
 
-  document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage));
+  document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage, employeeId, employeeName, shift));
+
+  const backToEmpBtn = document.getElementById('backToEmployeesBtn');
+  if (backToEmpBtn) backToEmpBtn.addEventListener('click', () => renderShiftGate(me, stage));
+
   const switchBtn = document.getElementById('switchStageBtn');
   if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 }
 
-async function submit(me, stage) {
+async function submit(me, stage, employeeId, employeeName, shift) {
   const btn = document.getElementById('submitBtn');
   const entryDate = document.getElementById('entryDate').value;
   const cards = document.querySelectorAll('.item-card');
@@ -892,7 +1060,13 @@ async function submit(me, stage) {
     const res = await fetch(`${API}/api/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code, items }),
+      body: JSON.stringify({
+        telegram_id: me.telegram_id,
+        entry_date: entryDate,
+        stage: stage.code,
+        employee_id: employeeId || undefined,
+        items,
+      }),
     });
     const data = await res.json();
     if (data.ok) {
@@ -902,6 +1076,8 @@ async function submit(me, stage) {
       loadToday(me.telegram_id);
     } else if (data.error === 'day_closed') {
       showToast('Этот день уже закрыт. Обратись к администратору.');
+    } else if (data.error === 'shift_not_open') {
+      showToast('Смена уже закрыта. Обратись к администратору.');
     } else {
       showToast('Ошибка при сохранении');
     }
@@ -909,7 +1085,7 @@ async function submit(me, stage) {
     showToast('Ошибка сети');
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Отправить данные';
+    btn.textContent = `Сохранить${employeeId ? ` за ${employeeName}` : ''}`;
   }
 }
 
@@ -926,7 +1102,7 @@ async function loadToday(telegramId) {
     <h2>Внесено сегодня</h2>
     ${rows.map(r => `
       <div class="log-row" data-entry-id="${r.id}">
-        <span>${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title}${r.drum_number ? ', барабан ' + r.drum_number : ''})</span></span>
+        <span>${r.employee_name ? `<b>${r.employee_name}:</b> ` : ''}${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title}${r.drum_number ? ', барабан ' + r.drum_number : ''})</span></span>
         <span class="right">
           <span class="t">${r.created_at.slice(11, 16)}</span>
           <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
