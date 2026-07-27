@@ -1,7 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, '..', 'factory.db'));
+const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'factory.db');
+const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
 // Этапы производства (фиксированный список, порядок важен для отчёта)
@@ -37,11 +38,12 @@ const STAGES = [
       { code: 'brak', label: 'Брак', countsAsGood: false },
     ],
   },
+  { code: 'warehouse_gp', title: 'Склад ГП', needsGrade: false, formType: 'quantity', gradeOptions: null },
 ];
 
 // Этапы, где введена система "старший + состав смены": старший сначала набирает
 // состав смены (кто сегодня работает), потом вносит выработку за каждого сотрудника отдельно
-const ROSTER_STAGES = ['molding', 'qc_molding', 'glazing', 'kiln', 'breakage', 'qc_final'];
+const ROSTER_STAGES = ['molding', 'qc_molding', 'glazing', 'kiln', 'breakage', 'qc_final', 'warehouse_gp'];
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -222,17 +224,17 @@ if (process.env.ADMIN_TELEGRAM_ID) {
 // Каталог продукции — добавляем при старте те позиции, которых ещё нет (по артикулу),
 // не трогая то, что уже накопилось или было изменено вручную через админку
 const CATALOG = [
-  { name: 'Раковина "Уголок" с ножкой', article: '1' },
-  { name: 'Раковина "Россо" с ножкой', article: '2' },
-  { name: 'Раковина "Тюльпан" с ножкой', article: '3' },
-  { name: 'Раковина "Капля" с ножкой', article: '4' },
-  { name: 'Раковина "Верона" с ножкой', article: '5' },
-  { name: '60см. Раковина с ножкой', article: '6' },
-  { name: '65см. Раковина с ножкой', article: '7' },
+  { name: 'Раковина "Уголок"', article: '1' },
+  { name: 'Раковина "Россо"', article: '2' },
+  { name: 'Раковина "Тюльпан"', article: '3' },
+  { name: 'Раковина "Капля"', article: '4' },
+  { name: 'Раковина "Верона"', article: '5' },
+  { name: '60см. Раковина', article: '6' },
+  { name: '65см. Раковина', article: '7' },
   { name: 'Стандартная ножка для раковины', article: '22' },
-  { name: 'Раковина "Семья" с ножкой', article: '8' },
+  { name: 'Раковина "Семья"', article: '8' },
   { name: 'Ножка "Семья"', article: '23' },
-  { name: 'Раковина "Детская" с ножкой', article: '9' },
+  { name: 'Раковина "Детская"', article: '9' },
   { name: 'Ножка "Детская"', article: '24' },
   { name: 'Раковина "ТВ" под тумбу', article: '12' },
   { name: 'Унитаз "Детский" с бачком', article: '13' },
@@ -252,6 +254,15 @@ for (const item of CATALOG) {
   if (existingArticles.has(item.article)) continue;
   insertCatalogItem.run(item.name, item.article, 'шт', nextOrder);
   nextOrder++;
+}
+
+// Миграция: подтягиваем актуальное название из CATALOG для уже существующих артикулов
+// (например уборка "с ножкой" в названиях раковин — ножка теперь отдельная позиция)
+const updateNomName = db.prepare('UPDATE nomenclature SET name = ? WHERE article = ? AND name != ?');
+for (const item of CATALOG) {
+  if (item.article) {
+    updateNomName.run(item.name, item.article, item.name);
+  }
 }
 
 // Дефолтная номенклатура — если таблица совсем пустая (первый запуск без каталога выше)
