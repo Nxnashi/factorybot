@@ -1,5 +1,6 @@
 const express = require('express');
 const { db } = require('../src/db');
+const { todayLocal } = require('../src/util');
 const { buildReportWorkbook, reportFilename } = require('../src/reportGenerator');
 
 const router = express.Router();
@@ -16,7 +17,7 @@ router.use(requireAdmin);
 
 router.get('/', async (req, res) => {
   const { date_from, date_to } = req.query;
-  const from = date_from || new Date().toISOString().slice(0, 10);
+  const from = date_from || todayLocal();
   const to = date_to || from;
 
   const workbook = await buildReportWorkbook(from, to);

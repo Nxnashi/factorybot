@@ -1,9 +1,11 @@
 const express = require('express');
-const multer = require('multer');
 const { db, STAGES, ROSTER_STAGES } = require('../src/db');
+const { DRUMS } = require('../src/catalog');
+const { post, cancelByRef, updateByRef } = require('../src/postings');
+const { describeEntry } = require('../src/describe');
+const { todayLocal, nowLocal } = require('../src/util');
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 function getStageMeta(code) {
   return STAGES.find(s => s.code === code);
@@ -13,112 +15,56 @@ function parseStages(stageField) {
   return String(stageField).split(',').map(s => s.trim()).filter(Boolean);
 }
 
+function isDayClosed(date) {
+  return !!db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(date);
+}
+
 // Кто я и какие у меня этапы (может быть несколько)
 router.get('/me/:telegramId', (req, res) => {
-  const { telegramId } = req.params;
-  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegramId);
-  if (!user) {
-    return res.status(404).json({ error: 'not_registered' });
-  }
-  const stageCodes = parseStages(user.stage);
-  const stages = stageCodes.map(code => {
-    const meta = getStageMeta(code);
-    return {
-      code,
-      title: meta ? meta.title : code,
-      needs_grade: meta ? meta.needsGrade : false,
-      form_type: meta ? meta.formType : 'quantity',
-      grade_options: meta ? meta.gradeOptions : null,
-      is_roster_stage: ROSTER_STAGES.includes(code),
-    };
-  });
-  res.json({
-    telegram_id: user.telegram_id,
-    full_name: user.full_name,
-    is_admin: !!user.is_admin,
-    stages,
-  });
+  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(req.params.telegramId);
+  if (!user) return res.status(404).json({ error: 'not_registered' });
+
+  const stages = parseStages(user.stage).map(code => getStageMeta(code)).filter(Boolean).map(meta => ({
+    code: meta.code,
+    title: meta.title,
+    form_type: meta.formType,
+    header: meta.header || null,
+    fields: meta.fields || null,
+    hint: meta.hint || null,
+    grade_options: meta.gradeOptions || null,
+    is_roster_stage: ROSTER_STAGES.includes(meta.code),
+    drums: DRUMS[meta.code] || null,
+  }));
+
+  res.json({ telegram_id: user.telegram_id, full_name: user.full_name, is_admin: !!user.is_admin, stages });
 });
 
-// Приём фото накладной (этап "Приход ТМЦ") — сохраняем метаданные и пересылаем админам в Telegram
-// multipart/form-data: telegram_id, entry_date, caption?, photo (файл)
-router.post('/intake-photo', upload.single('photo'), async (req, res) => {
-  const { telegram_id, entry_date, caption } = req.body;
+// --- Замес как единица работы: сырьё + обязательный выход. За день замесов может быть много ---
 
-  if (!telegram_id || !entry_date || !req.file) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
-
-  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
-  if (!user) {
-    return res.status(404).json({ error: 'not_registered' });
-  }
-
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
-  if (closedDay) {
-    return res.status(403).json({ error: 'day_closed' });
-  }
-
-  const allowedStages = parseStages(user.stage);
-  if (!allowedStages.includes('intake')) {
-    return res.status(403).json({ error: 'stage_not_allowed' });
-  }
-
-  db.prepare(`
-    INSERT INTO intake_photos (entry_date, telegram_id, employee_name, caption)
-    VALUES (?, ?, ?, ?)
-  `).run(entry_date, user.telegram_id, user.full_name, caption || null);
-
-  // Пересылаем фото всем администраторам в Telegram
-  if (process.env.BOT_TOKEN) {
-    try {
-      const bot = require('../src/bot');
-      const admins = db.prepare('SELECT telegram_id FROM users WHERE is_admin = 1').all();
-      const captionText = `📷 Накладная от ${user.full_name} за ${entry_date}` + (caption ? `\n${caption}` : '');
-      for (const admin of admins) {
-        await bot.sendPhoto(admin.telegram_id, req.file.buffer, { caption: captionText });
-      }
-    } catch (err) {
-      console.error('Не удалось переслать фото накладной админам:', err.message);
-    }
-  }
-
-  res.json({ ok: true });
-});
-
-// Сколько фото накладных отправлено сегодня этим сотрудником
-router.get('/today-photos/:telegramId', (req, res) => {
-  const { telegramId } = req.params;
-  const today = new Date().toISOString().slice(0, 10);
+// Замесы за сегодня по этапу (для экрана выбора барабана)
+router.get('/mixing-batch/today', (req, res) => {
+  const { stage, entry_date } = req.query;
+  if (!stage) return res.status(400).json({ error: 'bad_request' });
   const rows = db.prepare(`
-    SELECT id, caption, created_at FROM intake_photos
-    WHERE telegram_id = ? AND entry_date = ?
-    ORDER BY created_at DESC
-  `).all(telegramId, today);
+    SELECT id, drum_number, batch_no, code, status, output_quantity, created_at, employee_name, telegram_id
+    FROM mixing_batches
+    WHERE stage = ? AND entry_date = ? AND status != 'cancelled'
+    ORDER BY drum_number, batch_no
+  `).all(stage, entry_date || todayLocal());
   res.json(rows);
 });
 
-// --- Замес как единица работы (батч): сырьё + обязательный выход в конце ---
-
-// Начать замес или вернуться к уже открытому (по этапу+барабану+сотруднику) —
-// это гарантирует, что прогресс не потеряется, если рабочий свернул мини-апп
+// Начать замес или вернуться к уже открытому (этап+барабан+сотрудник) — прогресс не теряется при сворачивании
 router.post('/mixing-batch/start', (req, res) => {
   const { telegram_id, entry_date, stage, drum_number } = req.body;
-  if (!telegram_id || !entry_date || !stage || !drum_number) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
-  if (!['clay_mixing', 'glaze_mixing'].includes(stage)) {
-    return res.status(400).json({ error: 'bad_stage' });
-  }
+  if (!telegram_id || !entry_date || !stage || !drum_number) return res.status(400).json({ error: 'bad_request' });
+  if (!DRUMS[stage]) return res.status(400).json({ error: 'bad_stage' });
+  if (!DRUMS[stage].includes(Number(drum_number))) return res.status(400).json({ error: 'bad_drum' });
 
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) return res.status(404).json({ error: 'not_registered' });
-
-  const allowedStages = parseStages(user.stage);
-  if (!allowedStages.includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
-
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
-  if (closedDay) return res.status(403).json({ error: 'day_closed' });
+  if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
+  if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
 
   let batch = db.prepare(`
     SELECT * FROM mixing_batches
@@ -127,175 +73,123 @@ router.post('/mixing-batch/start', (req, res) => {
   `).get(telegram_id, stage, drum_number);
 
   if (!batch) {
-    const info = db.prepare(`
-      INSERT INTO mixing_batches (entry_date, stage, telegram_id, employee_name, drum_number)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(entry_date, stage, user.telegram_id, user.full_name, drum_number);
-    batch = db.prepare('SELECT * FROM mixing_batches WHERE id = ?').get(info.lastInsertRowid);
+    const tx = db.transaction(() => {
+      const batchNo = db.prepare(`
+        SELECT COUNT(*) AS c FROM mixing_batches WHERE entry_date = ? AND stage = ? AND drum_number = ? AND status != 'cancelled'
+      `).get(entry_date, stage, drum_number).c + 1;
+      const info = db.prepare(`
+        INSERT INTO mixing_batches (entry_date, stage, telegram_id, employee_name, drum_number, batch_no, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(entry_date, stage, user.telegram_id, user.full_name, drum_number, batchNo, nowLocal());
+      const id = info.lastInsertRowid;
+      const code = post({
+        stage, entryDate: entry_date, telegramId: user.telegram_id, actor: user.full_name,
+        refTable: 'mixing_batches', refId: id, kind: 'batch',
+        summary: `Замес №${batchNo}, барабан ${drum_number} (в процессе)`,
+      });
+      db.prepare('UPDATE mixing_batches SET code = ? WHERE id = ?').run(code, id);
+      return id;
+    });
+    batch = db.prepare('SELECT * FROM mixing_batches WHERE id = ?').get(tx());
   }
 
   const materials = db.prepare(`
-    SELECT me.id, me.quantity, me.created_at,
-           m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS material_name
+    SELECT me.id, me.quantity, me.created_at, me.op_code,
+           CASE WHEN m.article IS NOT NULL THEN m.article || ' - ' ELSE '' END || m.name AS material_name
     FROM material_entries me
     JOIN materials m ON m.id = me.material_id
     WHERE me.batch_id = ?
-    ORDER BY me.created_at
+    ORDER BY me.created_at, me.id
   `).all(batch.id);
 
   res.json({ batch, materials });
 });
 
-// Добавить сырьё в открытый замес (можно вызывать несколько раз подряд)
+// Добавить сырьё в открытый замес (можно несколько раз подряд)
 router.post('/mixing-batch/add-materials', (req, res) => {
   const { batch_id, telegram_id, items } = req.body;
-  if (!batch_id || !telegram_id || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
+  if (!batch_id || !telegram_id || !Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'bad_request' });
 
   const batch = db.prepare('SELECT * FROM mixing_batches WHERE id = ?').get(batch_id);
   if (!batch) return res.status(404).json({ error: 'not_found' });
   if (batch.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
   if (batch.status !== 'in_progress') return res.status(403).json({ error: 'batch_closed' });
+  if (isDayClosed(batch.entry_date)) return res.status(403).json({ error: 'day_closed' });
 
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(batch.entry_date);
-  if (closedDay) return res.status(403).json({ error: 'day_closed' });
+  const valid = items.filter(it => Number(it.quantity) > 0 && it.material_id);
+  if (valid.length === 0) return res.status(400).json({ error: 'no_valid_items' });
 
   const insert = db.prepare(`
-    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, drum_number, batch_id, comment)
-    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @material_id, @quantity, @drum_number, @batch_id, @comment)
+    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, drum_number, batch_id, comment, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const insertMany = db.transaction((rows) => { for (const row of rows) insert.run(row); });
-
-  const rows = items
-    .filter(it => Number(it.quantity) > 0)
-    .map(it => ({
-      entry_date: batch.entry_date,
-      stage: batch.stage,
-      telegram_id: batch.telegram_id,
-      employee_name: batch.employee_name,
-      material_id: it.material_id,
-      quantity: Number(it.quantity),
-      drum_number: batch.drum_number,
-      batch_id: batch.id,
-      comment: it.comment || null,
-    }));
-
-  if (rows.length === 0) return res.status(400).json({ error: 'no_valid_items' });
-
-  insertMany(rows);
-  res.json({ ok: true, saved: rows.length });
+  const tx = db.transaction(() => {
+    for (const it of valid) {
+      const mat = db.prepare('SELECT * FROM materials WHERE id = ? AND category = ? AND active = 1').get(it.material_id, batch.stage);
+      if (!mat) throw new Error('bad_material');
+      const info = insert.run(batch.entry_date, batch.stage, batch.telegram_id, batch.employee_name, mat.id,
+        Number(it.quantity), batch.drum_number, batch.id, it.comment || null, nowLocal());
+      const code = post({
+        stage: batch.stage, entryDate: batch.entry_date, telegramId: batch.telegram_id, actor: batch.employee_name,
+        refTable: 'material_entries', refId: info.lastInsertRowid, kind: 'material', parentCode: batch.code,
+        summary: `Списание: ${mat.article ? mat.article + ' - ' : ''}${mat.name} → замес №${batch.batch_no}, барабан ${batch.drum_number}`,
+        qty: Number(it.quantity),
+      });
+      db.prepare('UPDATE material_entries SET op_code = ? WHERE id = ?').run(code, info.lastInsertRowid);
+    }
+  });
+  try { tx(); } catch (e) {
+    if (e.message === 'bad_material') return res.status(400).json({ error: 'bad_material' });
+    throw e;
+  }
+  res.json({ ok: true, saved: valid.length });
 });
 
-// Завершить замес — указать сколько фактически получилось на выходе
+// Завершить замес — указать фактический выход
 router.post('/mixing-batch/complete', (req, res) => {
   const { batch_id, telegram_id, output_quantity } = req.body;
-  if (!batch_id || !telegram_id || !(Number(output_quantity) > 0)) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
+  if (!batch_id || !telegram_id || !(Number(output_quantity) > 0)) return res.status(400).json({ error: 'bad_request' });
 
   const batch = db.prepare('SELECT * FROM mixing_batches WHERE id = ?').get(batch_id);
   if (!batch) return res.status(404).json({ error: 'not_found' });
   if (batch.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
   if (batch.status !== 'in_progress') return res.status(403).json({ error: 'batch_closed' });
-
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(batch.entry_date);
-  if (closedDay) return res.status(403).json({ error: 'day_closed' });
+  if (isDayClosed(batch.entry_date)) return res.status(403).json({ error: 'day_closed' });
 
   const materialsCount = db.prepare('SELECT COUNT(*) AS c FROM material_entries WHERE batch_id = ?').get(batch_id).c;
   if (materialsCount === 0) return res.status(400).json({ error: 'no_materials' });
 
-  db.prepare(`
-    UPDATE mixing_batches SET output_quantity = ?, status = 'completed', completed_at = datetime('now') WHERE id = ?
-  `).run(Number(output_quantity), batch_id);
-
-  res.json({ ok: true });
+  const out = Number(output_quantity);
+  db.transaction(() => {
+    db.prepare("UPDATE mixing_batches SET output_quantity = ?, status = 'completed', completed_at = ? WHERE id = ?").run(out, nowLocal(), batch_id);
+    updateByRef('mixing_batches', batch_id, {
+      summary: `Замес №${batch.batch_no}, барабан ${batch.drum_number}: выход ${out} кг`,
+      qty: out,
+    });
+  })();
+  res.json({ ok: true, code: batch.code });
 });
 
 // Активная номенклатура для формы
 router.get('/nomenclature', (req, res) => {
-  const rows = db.prepare('SELECT id, name, article, unit FROM nomenclature WHERE active = 1 ORDER BY sort_order, id').all();
-  res.json(rows);
+  res.json(db.prepare('SELECT id, name, article, unit FROM nomenclature WHERE active = 1 ORDER BY sort_order, id').all());
 });
 
-// Активное сырьё (ТМЦ) для конкретного под-этапа замеса — clay_mixing или glaze_mixing
+// Статичный список сырья для замеса (clay_mixing / glaze_mixing)
 router.get('/materials', (req, res) => {
   const { stage } = req.query;
   if (!stage) return res.status(400).json({ error: 'bad_request' });
-  const rows = db.prepare('SELECT id, name, article, unit FROM materials WHERE category = ? AND active = 1 ORDER BY sort_order, id').all(stage);
-  res.json(rows);
-});
-
-// Отправка расхода сырья по замесу
-// body: { telegram_id, entry_date, stage, drum_number, items: [{ material_id, quantity, comment? }] }
-router.post('/submit-material', (req, res) => {
-  const { telegram_id, entry_date, stage, drum_number, items } = req.body;
-
-  if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'bad_request' });
-  }
-  if (!['clay_mixing', 'glaze_mixing'].includes(stage)) {
-    return res.status(400).json({ error: 'bad_stage' });
-  }
-  if (![1, 2, 3].includes(Number(drum_number))) {
-    return res.status(400).json({ error: 'bad_drum' });
-  }
-
-  const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
-  if (!user) {
-    return res.status(404).json({ error: 'not_registered' });
-  }
-
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
-  if (closedDay) {
-    return res.status(403).json({ error: 'day_closed' });
-  }
-
-  const allowedStages = parseStages(user.stage);
-  if (!allowedStages.includes(stage)) {
-    return res.status(403).json({ error: 'stage_not_allowed' });
-  }
-
-  const insert = db.prepare(`
-    INSERT INTO material_entries (entry_date, stage, telegram_id, employee_name, material_id, quantity, drum_number, comment)
-    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @material_id, @quantity, @drum_number, @comment)
-  `);
-  const insertMany = db.transaction((rows) => {
-    for (const row of rows) insert.run(row);
-  });
-
-  const rows = items
-    .filter(it => Number(it.quantity) > 0)
-    .map(it => ({
-      entry_date,
-      stage,
-      telegram_id: user.telegram_id,
-      employee_name: user.full_name,
-      material_id: it.material_id,
-      quantity: Number(it.quantity),
-      drum_number: Number(drum_number),
-      comment: it.comment || null,
-    }));
-
-  if (rows.length === 0) {
-    return res.status(400).json({ error: 'no_valid_items' });
-  }
-
-  insertMany(rows);
-  res.json({ ok: true, saved: rows.length });
+  res.json(db.prepare('SELECT id, name, article, unit FROM materials WHERE category = ? AND active = 1 ORDER BY sort_order, id').all(stage));
 });
 
 // --- Ростер и смена старшего (для этапов из ROSTER_STAGES) ---
 
-// Состав ростера на этапе (активные сотрудники, которых можно выбрать в смену)
 router.get('/roster', (req, res) => {
   const { stage } = req.query;
   if (!stage) return res.status(400).json({ error: 'bad_request' });
-  const rows = db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 ORDER BY full_name').all(stage);
-  res.json(rows);
+  res.json(db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 ORDER BY full_name').all(stage));
 });
 
-// Текущая смена старшего на этапе за сегодня (открытая или последняя закрытая) — null, если ещё не открывал
 router.get('/shift-status', (req, res) => {
   const { telegram_id, stage, entry_date } = req.query;
   if (!telegram_id || !stage || !entry_date) return res.status(400).json({ error: 'bad_request' });
@@ -303,18 +197,15 @@ router.get('/shift-status', (req, res) => {
   const shift = db.prepare(`
     SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? ORDER BY id DESC LIMIT 1
   `).get(telegram_id, stage, entry_date);
-
   if (!shift) return res.json({ shift: null, employees: [] });
 
   const employeeIds = shift.employee_ids.split(',').map(Number);
   const employees = employeeIds.length > 0
     ? db.prepare(`SELECT id, full_name FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`).all(...employeeIds)
     : [];
-
   res.json({ shift, employees });
 });
 
-// Открыть смену — выбрать состав сотрудников на сегодня для этого этапа
 router.post('/shift/open', (req, res) => {
   const { telegram_id, entry_date, stage, employee_ids } = req.body;
   if (!telegram_id || !entry_date || !stage || !Array.isArray(employee_ids) || employee_ids.length === 0) {
@@ -325,24 +216,18 @@ router.post('/shift/open', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) return res.status(404).json({ error: 'not_registered' });
   if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
-
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
-  if (closedDay) return res.status(403).json({ error: 'day_closed' });
+  if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
 
   const existingOpen = db.prepare(`
     SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? AND status = 'open'
   `).get(telegram_id, stage, entry_date);
   if (existingOpen) return res.status(409).json({ error: 'already_open', shift: existingOpen });
 
-  const info = db.prepare(`
-    INSERT INTO foreman_shifts (telegram_id, stage, entry_date, employee_ids) VALUES (?, ?, ?, ?)
-  `).run(telegram_id, stage, entry_date, employee_ids.join(','));
-
-  const shift = db.prepare('SELECT * FROM foreman_shifts WHERE id = ?').get(info.lastInsertRowid);
-  res.json({ ok: true, shift });
+  const info = db.prepare('INSERT INTO foreman_shifts (telegram_id, stage, entry_date, employee_ids, opened_at) VALUES (?, ?, ?, ?, ?)')
+    .run(telegram_id, stage, entry_date, employee_ids.join(','), nowLocal());
+  res.json({ ok: true, shift: db.prepare('SELECT * FROM foreman_shifts WHERE id = ?').get(info.lastInsertRowid) });
 });
 
-// Закрыть смену — после этого нельзя вносить новые записи от имени этой смены
 router.post('/shift/close', (req, res) => {
   const { telegram_id, shift_id } = req.body;
   if (!telegram_id || !shift_id) return res.status(400).json({ error: 'bad_request' });
@@ -352,34 +237,96 @@ router.post('/shift/close', (req, res) => {
   if (shift.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
   if (shift.status !== 'open') return res.status(403).json({ error: 'already_closed' });
 
-  db.prepare("UPDATE foreman_shifts SET status = 'closed', closed_at = datetime('now') WHERE id = ?").run(shift_id);
+  db.prepare("UPDATE foreman_shifts SET status = 'closed', closed_at = ? WHERE id = ?").run(nowLocal(), shift_id);
   res.json({ ok: true });
 });
 
-// Отправка партии записей за один сабмит формы
-// body: { telegram_id, entry_date, stage, employee_id?, items: [{ nomenclature_id, quantity, grade?, comment? }] }
-// Для этапов из ROSTER_STAGES employee_id обязателен — запись идёт на конкретного сотрудника смены,
-// а не на самого старшего (который выступает просто оператором ввода)
+// --- Приём документов по этапам ---
+
+const num = v => (v === undefined || v === null || v === '' ? 0 : Number(v));
+
+// Превращает введённые рабочим значения в строку entries по правилу этапа.
+// Возвращает { row } или { skip: true } (ничего не введено) или { error }.
+function buildRow(meta, item, header) {
+  const v = item.values || {};
+  const row = {
+    line_no: null, wagon_no: null, qty_total: null, qty_defect: null,
+    qty_repair: null, qty_s1: null, qty_s2: null, quantity: 0, grade: null,
+  };
+  const bad = (msg) => ({ error: 'invalid_values', message: msg });
+  const vals = Object.values(v).map(num);
+  if (vals.some(x => !Number.isFinite(x) || x < 0)) return bad('Числа не могут быть отрицательными');
+
+  switch (meta.rule) {
+    case 'molding': {
+      const total = num(v.qty_total);
+      const good = num(v.quantity);
+      if (total === 0 && good === 0) return { skip: true };
+      if (total <= 0) return bad('Укажи сколько залито');
+      if (good > total) return bad('Годных не может быть больше, чем залито');
+      row.line_no = Number(header.line_no);
+      row.qty_total = total;
+      row.quantity = good;
+      row.qty_defect = total - good; // автоматически возвращается в глину
+      break;
+    }
+    case 'total_defect': {
+      const total = num(v.qty_total);
+      const defect = num(v.qty_defect);
+      if (total === 0 && defect === 0) return { skip: true };
+      if (total <= 0) return bad('Укажи общее количество');
+      if (defect > total) return bad('Брак не может быть больше общего количества');
+      row.qty_total = total;
+      row.qty_defect = defect;
+      row.quantity = total - defect;
+      break;
+    }
+    case 'sorting': {
+      const s1 = num(v.qty_s1), s2 = num(v.qty_s2), rep = num(v.qty_repair), def = num(v.qty_defect);
+      if (s1 + s2 + rep + def === 0) return { skip: true };
+      row.qty_s1 = s1; row.qty_s2 = s2; row.qty_repair = rep; row.qty_defect = def;
+      row.qty_total = s1 + s2 + rep + def;
+      row.quantity = s1 + s2;
+      break;
+    }
+    case 'simple': {
+      const q = num(v.quantity);
+      if (q === 0) return { skip: true };
+      row.quantity = q;
+      if (meta.header && meta.header.key === 'wagon_no') row.wagon_no = Number(header.wagon_no);
+      if (meta.needsGrade) {
+        if (!meta.gradeOptions.some(g => g.code === item.grade)) return bad('Не выбран сорт');
+        row.grade = item.grade;
+      }
+      break;
+    }
+    default:
+      return bad('Неизвестный этап');
+  }
+  return { row };
+}
+
+// body: { telegram_id, entry_date, stage, employee_id, header: {line_no|wagon_no}, items: [{ nomenclature_id, values:{...}, grade?, comment? }] }
+// Для этапов из ROSTER_STAGES employee_id обязателен и должен быть в открытой смене старшего
 router.post('/submit', (req, res) => {
   const { telegram_id, entry_date, stage, employee_id, items } = req.body;
+  const header = req.body.header || {};
 
   if (!telegram_id || !entry_date || !stage || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'bad_request' });
   }
+  const meta = getStageMeta(stage);
+  if (!meta || meta.formType !== 'doc') return res.status(400).json({ error: 'bad_stage' });
 
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
-  if (!user) {
-    return res.status(404).json({ error: 'not_registered' });
-  }
+  if (!user) return res.status(404).json({ error: 'not_registered' });
+  if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
+  if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
 
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry_date);
-  if (closedDay) {
-    return res.status(403).json({ error: 'day_closed' });
-  }
-
-  const allowedStages = parseStages(user.stage);
-  if (!allowedStages.includes(stage)) {
-    return res.status(403).json({ error: 'stage_not_allowed' });
+  if (meta.header) {
+    const h = Number(header[meta.header.key]);
+    if (!Number.isInteger(h) || h < 1) return res.status(400).json({ error: 'header_required', message: `Укажи: ${meta.header.label}` });
+    header[meta.header.key] = h;
   }
 
   let employeeName = user.full_name;
@@ -388,110 +335,119 @@ router.post('/submit', (req, res) => {
 
   if (ROSTER_STAGES.includes(stage)) {
     if (!employee_id) return res.status(400).json({ error: 'employee_required' });
-
     const shift = db.prepare(`
       SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? AND status = 'open'
       ORDER BY id DESC LIMIT 1
     `).get(telegram_id, stage, entry_date);
     if (!shift) return res.status(403).json({ error: 'shift_not_open' });
-
-    const shiftEmployeeIds = shift.employee_ids.split(',').map(Number);
-    if (!shiftEmployeeIds.includes(Number(employee_id))) {
+    if (!shift.employee_ids.split(',').map(Number).includes(Number(employee_id))) {
       return res.status(403).json({ error: 'employee_not_in_shift' });
     }
-
     const employee = db.prepare('SELECT * FROM employees WHERE id = ?').get(employee_id);
     if (!employee) return res.status(404).json({ error: 'employee_not_found' });
-
     employeeName = employee.full_name;
     enteredBy = user.full_name;
     resolvedEmployeeId = employee.id;
   }
 
-  const stageMeta = getStageMeta(stage);
+  // Сначала проверяем все строки, потом пишем всё одной транзакцией
+  const built = [];
+  for (const item of items) {
+    const nom = db.prepare('SELECT * FROM nomenclature WHERE id = ?').get(item.nomenclature_id);
+    if (!nom) return res.status(400).json({ error: 'bad_nomenclature' });
+    const r = buildRow(meta, item, header);
+    if (r.error) return res.status(400).json({ error: r.error, message: `${nom.name}: ${r.message}` });
+    if (r.skip) continue;
+    built.push({ nom, row: r.row, comment: item.comment || null });
+  }
+  if (built.length === 0) return res.status(400).json({ error: 'no_valid_items' });
 
   const insert = db.prepare(`
-    INSERT INTO entries (entry_date, stage, telegram_id, employee_name, employee_id, entered_by, nomenclature_id, quantity, grade, comment)
-    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @employee_id, @entered_by, @nomenclature_id, @quantity, @grade, @comment)
+    INSERT INTO entries (entry_date, stage, telegram_id, employee_name, employee_id, entered_by, nomenclature_id,
+                         quantity, grade, comment, line_no, wagon_no, qty_total, qty_defect, qty_repair, qty_s1, qty_s2, created_at)
+    VALUES (@entry_date, @stage, @telegram_id, @employee_name, @employee_id, @entered_by, @nomenclature_id,
+            @quantity, @grade, @comment, @line_no, @wagon_no, @qty_total, @qty_defect, @qty_repair, @qty_s1, @qty_s2, @created_at)
   `);
+  const codes = [];
+  db.transaction(() => {
+    for (const b of built) {
+      const info = insert.run({
+        entry_date, stage, telegram_id: user.telegram_id, employee_name: employeeName,
+        employee_id: resolvedEmployeeId, entered_by: enteredBy, nomenclature_id: b.nom.id,
+        comment: b.comment, created_at: nowLocal(), ...b.row,
+      });
+      const code = post({
+        stage, entryDate: entry_date, telegramId: user.telegram_id, actor: employeeName, enteredBy,
+        refTable: 'entries', refId: info.lastInsertRowid, kind: 'post', qty: b.row.quantity,
+        summary: `${b.nom.name}${b.nom.article ? ' (' + b.nom.article + ')' : ''} — ${describeEntry(stage, b.row)}`,
+      });
+      db.prepare('UPDATE entries SET op_code = ? WHERE id = ?').run(code, info.lastInsertRowid);
+      codes.push(code);
+    }
+  })();
 
-  const insertMany = db.transaction((rows) => {
-    for (const row of rows) insert.run(row);
-  });
-
-  const rows = items
-    .filter(it => Number(it.quantity) > 0)
-    .map(it => ({
-      entry_date,
-      stage,
-      telegram_id: user.telegram_id,
-      employee_name: employeeName,
-      employee_id: resolvedEmployeeId,
-      entered_by: enteredBy,
-      nomenclature_id: it.nomenclature_id,
-      quantity: Number(it.quantity),
-      grade: stageMeta && stageMeta.needsGrade ? (it.grade || null) : null,
-      comment: it.comment || null,
-    }));
-
-  if (rows.length === 0) {
-    return res.status(400).json({ error: 'no_valid_items' });
-  }
-
-  insertMany(rows);
-  res.json({ ok: true, saved: rows.length });
+  res.json({ ok: true, saved: built.length, codes });
 });
 
-// Удалить свою запись (только за сегодня — чтобы нельзя было редактировать закрытую историю)
-// id может быть с префиксом "material-<id>" для расхода сырья, иначе — обычная запись
+// Удалить свою запись (только за сегодня). id с префиксом "material-<id>" — расход сырья
 router.delete('/entries/:id', (req, res) => {
   const { telegram_id } = req.query;
   const { id } = req.params;
   if (!telegram_id) return res.status(400).json({ error: 'bad_request' });
 
-  const today = new Date().toISOString().slice(0, 10);
   const isMaterial = id.startsWith('material-');
   const table = isMaterial ? 'material_entries' : 'entries';
   const realId = isMaterial ? id.replace('material-', '') : id;
-
   const entry = db.prepare(`SELECT * FROM ${table} WHERE id = ?`).get(realId);
 
   if (!entry) return res.status(404).json({ error: 'not_found' });
   if (entry.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
-  if (entry.entry_date !== today) return res.status(403).json({ error: 'not_today' });
+  if (entry.entry_date !== todayLocal()) return res.status(403).json({ error: 'not_today' });
+  if (isDayClosed(entry.entry_date)) return res.status(403).json({ error: 'day_closed' });
+  if (isMaterial && entry.batch_id) {
+    const b = db.prepare('SELECT status FROM mixing_batches WHERE id = ?').get(entry.batch_id);
+    if (b && b.status === 'completed') return res.status(403).json({ error: 'batch_closed' });
+  }
 
-  const closedDay = db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(entry.entry_date);
-  if (closedDay) return res.status(403).json({ error: 'day_closed' });
-
-  db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(realId);
+  const who = db.prepare('SELECT full_name FROM users WHERE telegram_id = ?').get(telegram_id);
+  db.transaction(() => {
+    db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(realId);
+    cancelByRef(table, Number(realId), who ? who.full_name : String(telegram_id));
+  })();
   res.json({ ok: true });
 });
 
-// История за сегодня для этого сотрудника (чтобы видел что уже вбил) — количественные записи + расход сырья
+// Внесено сегодня этим пользователем (документы + расход сырья)
 router.get('/today/:telegramId', (req, res) => {
-  const { telegramId } = req.params;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   const rows = db.prepare(`
-    SELECT e.id, e.stage, e.employee_name, e.quantity, e.grade, e.comment, e.created_at, n.name AS nomenclature_name
+    SELECT e.*, n.name AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.telegram_id = ? AND e.entry_date = ?
-    ORDER BY e.created_at DESC
-  `).all(telegramId, today).map(r => ({ ...r, id: String(r.id) }));
+    ORDER BY e.created_at DESC, e.id DESC
+  `).all(req.params.telegramId, today).map(r => ({
+    id: String(r.id), stage: r.stage, employee_name: r.employee_name, quantity: r.quantity,
+    nomenclature_name: r.nomenclature_name, description: describeEntry(r.stage, r),
+    op_code: r.op_code, created_at: r.created_at,
+  }));
 
   const materialRows = db.prepare(`
-    SELECT me.id, me.stage, me.quantity, me.drum_number, me.comment, me.created_at,
-           m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS nomenclature_name
+    SELECT me.id, me.stage, me.quantity, me.drum_number, me.created_at, me.op_code,
+           CASE WHEN m.article IS NOT NULL THEN m.article || ' - ' ELSE '' END || m.name AS nomenclature_name
     FROM material_entries me
     JOIN materials m ON m.id = me.material_id
     WHERE me.telegram_id = ? AND me.entry_date = ?
-    ORDER BY me.created_at DESC
-  `).all(telegramId, today).map(r => ({ ...r, id: `material-${r.id}`, grade: null }));
+    ORDER BY me.created_at DESC, me.id DESC
+  `).all(req.params.telegramId, today).map(r => ({
+    id: `material-${r.id}`, stage: r.stage, employee_name: null, quantity: r.quantity,
+    nomenclature_name: r.nomenclature_name, description: `${r.quantity} кг, барабан ${r.drum_number}`,
+    op_code: r.op_code, created_at: r.created_at,
+  }));
 
   const all = [...rows, ...materialRows].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-  const withTitles = all.map(r => ({ ...r, stage_title: (getStageMeta(r.stage) || {}).title || r.stage }));
-  res.json(withTitles);
+  res.json(all.map(r => ({ ...r, stage_title: (getStageMeta(r.stage) || {}).title || r.stage })));
 });
 
 module.exports = router;

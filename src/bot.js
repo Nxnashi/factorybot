@@ -1,5 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api').default;
 const { db, STAGES } = require('./db');
+const { todayLocal } = require('./util');
 
 const token = process.env.BOT_TOKEN;
 const webAppUrl = process.env.WEBAPP_URL; // например https://factory-tracker.onrender.com
@@ -53,7 +54,7 @@ bot.onText(/\/report/i, async (msg) => {
     return;
   }
   const { buildReportWorkbook, reportFilename } = require('./reportGenerator');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const hasEntries = db.prepare('SELECT COUNT(*) AS c FROM entries WHERE entry_date = ?').get(today).c;
   if (hasEntries === 0) {
     bot.sendMessage(chatId, `За ${today} пока нет ни одной записи.`);

@@ -260,6 +260,21 @@
   .balance-table td.cell-warn { background: rgba(179, 55, 44, 0.15); color: #b3372c; font-weight: 700; }
   .balance-table td.cell-over { background: rgba(196, 98, 45, 0.15); color: var(--accent); font-weight: 700; }
 
+  .cell-sub { font-size: 10px; font-weight: 400; color: var(--hint); }
+  .cell-sub.bad { color: #b3372c; }
+  .op-code { font-size: 10px; color: var(--hint); font-family: monospace; }
+  .matrix-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 12px; -webkit-overflow-scrolling: touch; }
+  .matrix { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  .matrix th, .matrix td { padding: 7px 9px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); white-space: nowrap; text-align: right; }
+  .matrix th { background: #EFEAE0; font-size: 11px; color: var(--hint); }
+  .matrix td.name, .matrix th.name { text-align: left; white-space: normal; min-width: 170px; position: sticky; left: 0; background: var(--surface); }
+  .matrix th.name { background: #EFEAE0; }
+  .matrix tr.total td { font-weight: 700; background: #EFEAE0; }
+  .matrix .meta td { font-size: 10px; color: var(--hint); }
+  .posting { border-left: 3px solid var(--accent); }
+  .posting.cancelled { opacity: .55; border-left-color: #b3372c; }
+  .posting .code { font-family: monospace; font-weight: 700; font-size: 12px; }
+  .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .balance-legend {
     display: flex;
     flex-wrap: wrap;
@@ -343,6 +358,11 @@ function getTelegramId() {
   return params.get('tid');
 }
 
+function todayLocal() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
+}
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
 const telegramId = getTelegramId();
 const app = document.getElementById('app');
 
@@ -369,20 +389,24 @@ function render(stages) {
     <div class="tabs-wrap">
       <div class="tabs">
         <div class="tab active" data-tab="shifts">Смены</div>
+        <div class="tab" data-tab="mixing">Замесы</div>
         <div class="tab" data-tab="balance">Баланс</div>
+        <div class="tab" data-tab="postings">Проводки</div>
         <div class="tab" data-tab="users">Сотрудники</div>
         <div class="tab" data-tab="roster">Ростер цехов</div>
         <div class="tab" data-tab="nom">Номенклатура</div>
-        <div class="tab" data-tab="materials">Сырьё</div>
+        <div class="tab" data-tab="catalogs">Справочники</div>
         <div class="tab" data-tab="export">Экспорт</div>
       </div>
     </div>
     <section class="active" id="tab-shifts"></section>
+    <section id="tab-mixing"></section>
     <section id="tab-balance"></section>
+    <section id="tab-postings"></section>
     <section id="tab-users"></section>
     <section id="tab-roster"></section>
     <section id="tab-nom"></section>
-    <section id="tab-materials"></section>
+    <section id="tab-catalogs"></section>
     <section id="tab-export"></section>
   `;
 
@@ -406,18 +430,20 @@ function render(stages) {
   updateTabsFade();
 
   renderShiftsTab(stages);
+  renderMixingTab(stages);
   renderBalanceTab(stages);
+  renderPostingsTab(stages);
   renderUsersTab(stages);
   renderRosterTab(stages);
   renderNomTab();
-  renderMaterialsTab();
+  renderCatalogsTab();
   renderExportTab();
 }
 
 // --- Баланс между этапами ---
 async function renderBalanceTab(stages) {
   const el = document.getElementById('tab-balance');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   el.innerHTML = `
     <form class="inline export-form" id="balanceFilterForm">
@@ -430,13 +456,14 @@ async function renderBalanceTab(stages) {
     <div id="balanceResult"></div>
   `;
 
-  // Приход ТМЦ — фото, в количественный баланс не входит
-  const stageCols = stages.filter(s => s.formType === 'quantity');
+  // В баланс входят только поштучные этапы-документы (замесы меряются в кг, отдельная вкладка)
+  const stageCols = stages.filter(s => s.formType === 'doc');
 
   async function loadBalance(dateFrom, dateTo) {
     const resultEl = document.getElementById('balanceResult');
     resultEl.innerHTML = `<div class="state-screen">Загрузка…</div>`;
-    const data = await (await fetch(`/api/admin/balance?date_from=${dateFrom}&date_to=${dateTo}`, { headers: authHeaders() })).json();
+    const resp = await (await fetch(`/api/admin/balance?date_from=${dateFrom}&date_to=${dateTo}`, { headers: authHeaders() })).json();
+    const data = resp.items;
 
     if (data.length === 0) {
       resultEl.innerHTML = `<div class="state-screen">Нет данных за этот период</div>`;
@@ -448,8 +475,7 @@ async function renderBalanceTab(stages) {
       nom.deltas.forEach(d => { deltaByToStage[d.to_stage] = d; });
 
       const cells = stageCols.map(col => {
-        const stageData = nom.per_stage.find(s => s.code === col.code);
-        const total = stageData ? stageData.total : 0;
+        const st = nom.per_stage.find(s => s.code === col.code);
         const d = deltaByToStage[col.code];
         let cls = '';
         let title = '';
@@ -457,21 +483,28 @@ async function renderBalanceTab(stages) {
           cls = d.delta > 0 ? 'cell-warn' : 'cell-over';
           title = d.delta > 0 ? `не хватает ${d.delta} относительно предыдущего этапа` : `лишнее ${Math.abs(d.delta)} относительно предыдущего этапа`;
         }
-        return `<td class="${cls}" title="${title}">${total > 0 ? total : '—'}</td>`;
+        const out = st ? st.out : 0;
+        let sub = '';
+        if (st && st.defect > 0) sub += `<div class="cell-sub bad">${col.code === 'molding' ? 'в глину' : 'брак'} −${st.defect}</div>`;
+        if (st && st.repair > 0) sub += `<div class="cell-sub">ремонт ${st.repair}</div>`;
+        if (st && st.grades) sub += `<div class="cell-sub">${Object.entries(st.grades).map(([g, q]) => `с${g}: ${q}`).join(' · ')}</div>`;
+        return `<td class="${cls}" title="${title}">${out > 0 || sub ? (out > 0 ? out : '—') : '—'}${sub}</td>`;
       }).join('');
 
-      return `<tr><td class="row-label">${nom.nomenclature_name}</td>${cells}</tr>`;
+      return `<tr><td class="row-label">${esc(nom.nomenclature_name)}</td>${cells}</tr>`;
     }).join('');
 
     const totalCells = stageCols.map(col => {
       const sum = data.reduce((acc, nom) => {
         const s = nom.per_stage.find(x => x.code === col.code);
-        return acc + (s ? s.total : 0);
+        return acc + (s ? s.out : 0);
       }, 0);
       return `<td>${sum > 0 ? sum : '—'}</td>`;
     }).join('');
 
     resultEl.innerHTML = `
+      <div class="card"><div class="row1">Возврат в глину с формовки: ${resp.returned_to_clay} шт</div>
+        <div class="row2">Разница «залито − годных» возвращается в глину автоматически</div></div>
       <div class="balance-table-wrap">
         <table class="balance-table">
           <thead>
@@ -486,6 +519,7 @@ async function renderBalanceTab(stages) {
           </tbody>
         </table>
       </div>
+      <div class="row2" style="margin-bottom:8px;">В ячейке — сколько вышло с этапа дальше (годные).</div>
       <div class="balance-legend">
         <span class="legend-item"><span class="legend-swatch warn"></span> не хватает относительно предыдущего этапа</span>
         <span class="legend-item"><span class="legend-swatch over"></span> больше, чем должно быть</span>
@@ -505,7 +539,7 @@ async function renderBalanceTab(stages) {
 // --- Смены (просмотр без экспорта) ---
 async function renderShiftsTab(stages) {
   const el = document.getElementById('tab-shifts');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   el.innerHTML = `
     <form class="inline export-form" id="shiftsFilterForm">
@@ -553,7 +587,7 @@ async function renderShiftsTab(stages) {
 
         // Итого по этапу — суммируем по номенклатуре(+сорт), фото и замесы в суммы не идут
         const stageTotals = {};
-        Object.values(employees).flat().filter(r => !r.is_photo && !String(r.id).startsWith('batch-')).forEach(r => {
+        Object.values(employees).flat().filter(r => !r.is_photo && !String(r.id).startsWith('batch-') && !String(r.id).startsWith('material-')).forEach(r => {
           const key = r.nomenclature_name + (r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : '');
           stageTotals[key] = (stageTotals[key] || 0) + r.quantity;
         });
@@ -574,14 +608,14 @@ async function renderShiftsTab(stages) {
             if (String(r.id).startsWith('batch-')) {
               return `
                 <div class="item-line">
-                  <span>${r.nomenclature_name}${r.quantity != null ? ': ' + r.quantity + ' кг' : ''}</span>
+                  <span>${esc(r.nomenclature_name)}${r.quantity != null ? ': ' + r.quantity + ' кг' : ''}<div class="op-code">${esc(r.op_code || '')}</div></span>
                   <span class="right"><span class="entry-time">${r.created_at.slice(11, 16)}</span></span>
                 </div>
               `;
             }
             return `
               <div class="item-line" data-entry-id="${r.id}">
-                <span>${r.nomenclature_name}${r.grade ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${r.quantity}${r.drum_number ? ` (барабан ${r.drum_number})` : ''}${r.entered_by ? ` <span class="entry-time">· внёс: ${r.entered_by}</span>` : ''}</span>
+                <span>${esc(r.nomenclature_name)}${r.grade && stage.legacy ? ' · ' + (GRADE_LABELS[r.grade] || r.grade) : ''} — ${esc(r.description != null ? r.description : r.quantity)}${r.drum_number ? ` (барабан ${r.drum_number}${r.batch_no ? ', замес ' + r.batch_no : ''})` : ''}${r.entered_by ? ` <span class="entry-time">· внёс: ${esc(r.entered_by)}</span>` : ''}<div class="op-code">${esc(r.op_code || '')}</div></span>
                 <span class="right">
                   <span class="entry-time">${r.created_at.slice(11, 16)}</span>
                   <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
@@ -600,7 +634,7 @@ async function renderShiftsTab(stages) {
 
         const totalsBlock = Object.keys(stageTotals).length > 0 ? `
             <div class="stage-total">
-              <div class="row2" style="margin-bottom:4px;">Итого по этапу</div>
+              <div class="row2" style="margin-bottom:4px;">Итого по этапу (годные / вышло дальше)</div>
               ${Object.entries(stageTotals).map(([k, v]) => `
                 <div class="item-line total"><span>${k}</span><span>${v}</span></div>
               `).join('')}
@@ -688,7 +722,7 @@ async function renderUsersTab(stages) {
       <input name="full_name" required placeholder="Иван Иванов">
       <label>Этапы (можно выбрать несколько)</label>
       <div class="stage-checkboxes">
-        ${stages.map(s => `
+        ${stages.filter(s => !s.legacy).map(s => `
           <label class="stage-checkbox-item">
             <input type="checkbox" name="stage" value="${s.code}"> ${s.title}
           </label>
@@ -746,10 +780,10 @@ async function renderUsersTab(stages) {
 // --- Ростер сотрудников по цехам (не имеют доступа в бот — вносит за них старший) ---
 async function renderRosterTab(stages) {
   const el = document.getElementById('tab-roster');
-  const rosterStageCodes = stages.filter(s => s.formType === 'quantity').map(s => s.code);
+  const rosterStageCodes = stages.filter(s => s.formType === 'doc').map(s => s.code);
 
   const employees = await (await fetch('/api/admin/employees', { headers: authHeaders() })).json();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const openShifts = await (await fetch(`/api/admin/shifts?status=open&date_from=${today}&date_to=${today}`, { headers: authHeaders() })).json();
 
   const stageTitle = code => stages.find(s => s.code === code)?.title || code;
@@ -881,73 +915,151 @@ async function renderNomTab() {
   });
 }
 
-// --- Сырьё (ТМЦ) для замеса глины / замеса глазури ---
-async function renderMaterialsTab() {
-  const el = document.getElementById('tab-materials');
-  const items = await (await fetch('/api/admin/materials', { headers: authHeaders() })).json();
-  const CATEGORY_LABELS = { clay_mixing: 'Замес глины', glaze_mixing: 'Замес глазури' };
-
+// --- Замесы: матрица как в документе 1С (Замес 1..N + Сумма) ---
+async function renderMixingTab(stages) {
+  const el = document.getElementById('tab-mixing');
+  const today = todayLocal();
   el.innerHTML = `
-    <form class="inline" id="matForm">
-      <label>Название сырья</label>
-      <input name="name" required placeholder="Например: Кварц">
-      <label>Артикул (необязательно)</label>
-      <input name="article" placeholder="Например: 2">
-      <label>Категория</label>
-      <select name="category">
-        <option value="clay_mixing">Замес глины</option>
-        <option value="glaze_mixing">Замес глазури</option>
+    <form class="inline export-form" id="mixingFilterForm">
+      <label>Этап</label>
+      <select name="stage">
+        <option value="clay_mixing">Глина (замес)</option>
+        <option value="glaze_mixing">Глазурь (замес)</option>
       </select>
-      <label>Единица измерения</label>
-      <input name="unit" value="кг">
-      <button type="submit">Добавить сырьё</button>
+      <label>С даты</label>
+      <input type="date" name="date_from" value="${today}" required>
+      <label>По дату</label>
+      <input type="date" name="date_to" value="${today}" required>
+      <button type="submit">Показать</button>
     </form>
-    <div id="matList">
-      ${items.map(m => `
-        <div class="card">
-          <div class="row1">${m.name}${m.article ? ` (${m.article})` : ''} ${m.active ? '' : '(скрыто)'}</div>
-          <div class="row2">${CATEGORY_LABELS[m.category] || m.category} · ${m.unit}</div>
-          <div class="actions">
-            <button data-toggle-mat="${m.id}" data-active="${m.active}">${m.active ? 'Скрыть' : 'Показать'}</button>
-          </div>
-        </div>
-      `).join('')}
-    </div>
+    <div id="mixingResult"></div>
   `;
 
-  el.querySelector('#matForm').addEventListener('submit', async (e) => {
+  const STATUS = { completed: 'завершён', in_progress: 'в процессе', cancelled: 'отменён' };
+
+  async function load(stage, from, to) {
+    const out = document.getElementById('mixingResult');
+    out.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+    const groups = await (await fetch(`/api/admin/mixing-matrix?stage=${stage}&date_from=${from}&date_to=${to}`, { headers: authHeaders() })).json();
+    if (groups.length === 0) { out.innerHTML = `<div class="state-screen">Замесов за этот период нет</div>`; return; }
+
+    out.innerHTML = groups.map(g => `
+      <div class="row1" style="margin:6px 2px;">${formatDMY(g.entry_date)} · Барабан №${g.drum_number}</div>
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <thead>
+            <tr><th class="name">Номенклатура</th>${g.batches.map(b => `<th>Замес ${b.batch_no}</th>`).join('')}<th>Сумма</th></tr>
+            <tr class="meta"><td class="name">Код / время</td>${g.batches.map(b => `<td>${esc(b.code)}<br>${b.time} · ${esc(b.employee_name)}${b.status !== 'completed' ? '<br>' + STATUS[b.status] : ''}</td>`).join('')}<td></td></tr>
+          </thead>
+          <tbody>
+            ${g.rows.filter(r => r.sum > 0).map(r => `
+              <tr><td class="name">${esc((r.article ? r.article + ' - ' : '') + r.name)}</td>${r.values.map(v => `<td>${v || ''}</td>`).join('')}<td><b>${r.sum}</b></td></tr>
+            `).join('')}
+            <tr class="total"><td class="name">Итого сырья, кг</td>${g.totals.map(t => `<td>${t}</td>`).join('')}<td>${g.totals_sum}</td></tr>
+            <tr class="total"><td class="name">Выход, кг</td>${g.batches.map(b => `<td>${b.output_quantity == null ? '—' : b.output_quantity}</td>`).join('')}<td>${g.output_sum}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    `).join('');
+  }
+
+  el.querySelector('#mixingFilterForm').addEventListener('submit', (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
-    await fetch('/api/admin/materials', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({
-        name: fd.get('name'),
-        article: fd.get('article') || null,
-        category: fd.get('category'),
-        unit: fd.get('unit') || 'кг',
-      }),
-    });
-    renderMaterialsTab();
+    load(fd.get('stage'), fd.get('date_from'), fd.get('date_to'));
   });
+  load('clay_mixing', today, today);
+}
 
-  el.querySelectorAll('[data-toggle-mat]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const active = btn.dataset.active === '1';
-      await fetch(`/api/admin/materials/${btn.dataset.toggleMat}`, {
-        method: 'PUT',
-        headers: authHeaders(),
-        body: JSON.stringify({ active: !active }),
-      });
-      renderMaterialsTab();
-    });
+// --- Журнал проводок: у каждой операции уникальный код, отмены не стираются ---
+async function renderPostingsTab(stages) {
+  const el = document.getElementById('tab-postings');
+  const today = todayLocal();
+  const titleOf = code => (stages.find(s => s.code === code) || {}).title || code;
+
+  el.innerHTML = `
+    <form class="inline export-form" id="postingsForm">
+      <div class="filter-row">
+        <div><label>С даты</label><input type="date" name="date_from" value="${today}" required></div>
+        <div><label>По дату</label><input type="date" name="date_to" value="${today}" required></div>
+      </div>
+      <label>Этап</label>
+      <select name="stage">
+        <option value="">Все этапы</option>
+        ${stages.map(s => `<option value="${s.code}">${esc(s.title)}</option>`).join('')}
+      </select>
+      <label>Поиск по коду, сотруднику, содержанию</label>
+      <input name="q" placeholder="Например: FM-20261030-0007">
+      <label>Статус</label>
+      <select name="status"><option value="">Все</option><option value="posted">Проведённые</option><option value="cancelled">Отменённые</option></select>
+      <button type="submit">Показать</button>
+    </form>
+    <div id="postingsResult"></div>
+  `;
+
+  async function load(params) {
+    const out = document.getElementById('postingsResult');
+    out.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+    const qs = new URLSearchParams(params).toString();
+    const rows = await (await fetch(`/api/admin/postings?${qs}`, { headers: authHeaders() })).json();
+    if (rows.length === 0) { out.innerHTML = `<div class="state-screen">Проводок нет</div>`; return; }
+    out.innerHTML = `<div class="row2" style="margin-bottom:8px;">Найдено: ${rows.length}</div>` + rows.map(p => `
+      <div class="card posting ${p.status === 'cancelled' ? 'cancelled' : ''}">
+        <div class="row1"><span class="code">${esc(p.op_code)}</span> ${p.status === 'cancelled' ? '· ❌ отменено' : ''}</div>
+        <div class="row2">${esc(p.created_at)} · ${esc(titleOf(p.stage))}${p.parent_code ? ' · замес ' + esc(p.parent_code) : ''}</div>
+        <div style="font-size:13px; margin-top:4px;">${esc(p.summary || '')}</div>
+        <div class="row2">${p.actor_name ? 'Сотрудник: ' + esc(p.actor_name) : ''}${p.entered_by ? ' · внёс: ' + esc(p.entered_by) : ''}</div>
+        ${p.status === 'cancelled' ? `<div class="row2" style="color:#b3372c;">Отменил: ${esc(p.cancelled_by || '—')} · ${esc(p.cancelled_at || '')}</div>` : ''}
+      </div>
+    `).join('');
+  }
+
+  el.querySelector('#postingsForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const params = {};
+    for (const [k, v] of fd.entries()) if (v) params[k] = v;
+    load(params);
   });
+  load({ date_from: today, date_to: today });
+}
+
+// --- Справочники: статичные списки (только просмотр) + заготовки под комплекты ГП / ТМЦ / п/ф ---
+async function renderCatalogsTab() {
+  const el = document.getElementById('tab-catalogs');
+  const [materials, catalogs] = await Promise.all([
+    fetch('/api/admin/materials', { headers: authHeaders() }).then(r => r.json()),
+    fetch('/api/admin/catalogs', { headers: authHeaders() }).then(r => r.json()),
+  ]);
+  const LABELS = { clay_mixing: 'Глина (замес) — барабаны 1–3', glaze_mixing: 'Глазурь (замес) — барабан всегда 1' };
+
+  const placeholder = (title, rows, render) => `
+    <div class="card">
+      <div class="row1">${title}</div>
+      ${rows.length === 0
+        ? '<div class="row2">Структура готова, данные зальём позже</div>'
+        : rows.map(render).join('')}
+    </div>`;
+
+  el.innerHTML = `
+    <div class="card"><div class="row2">Списки сырья для замесов зафиксированы и через админку не меняются — только просмотр. Нужна правка — скажи разработчику.</div></div>
+    ${['clay_mixing', 'glaze_mixing'].map(cat => `
+      <div class="card">
+        <div class="row1">${LABELS[cat]}</div>
+        ${materials.filter(m => m.category === cat).map(m => `
+          <div class="item-line"><span>${esc((m.article ? m.article + ' - ' : '') + m.name)}</span><span>${esc(m.unit)}</span></div>
+        `).join('')}
+      </div>`).join('')}
+    ${placeholder('Комплекты готовой продукции', catalogs.kits, k => `<div class="item-line"><span>${esc(k.code || '')} ${esc(k.name)}</span><span>${k.items.length} поз.</span></div>`)}
+    ${placeholder('Все ТМЦ', catalogs.tmc, t => `<div class="item-line"><span>${esc(t.code || '')} ${esc(t.name)}</span><span>${esc(t.unit)}</span></div>`)}
+    ${placeholder('Полуфабрикаты (п/ф)', catalogs.semi_products, t => `<div class="item-line"><span>${esc(t.code || '')} ${esc(t.name)}</span><span>${esc(t.unit)}</span></div>`)}
+  `;
 }
 
 // --- Экспорт ---
 async function renderExportTab() {
   const el = document.getElementById('tab-export');
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
 
   const openDays = await (await fetch('/api/admin/open-days', { headers: authHeaders() })).json();
   const openDaysHtml = openDays.length > 0

@@ -217,6 +217,7 @@
   .grade-cell.brak label { color: var(--brak); }
   .grade-cell input {
     width: 100%;
+    min-width: 0;
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 8px 4px;
@@ -331,6 +332,20 @@
     font-size: 15px;
   }
   .roster-check-item input { width: 18px; height: 18px; }
+  .stepper { display: flex; align-items: center; gap: 6px; }
+  .stepper button {
+    width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font-size: 20px; line-height: 1;
+  }
+  .stepper input {
+    width: 64px; text-align: center; border: 1px solid var(--line); border-radius: 10px;
+    padding: 8px 4px; font-size: 16px; font-weight: 700; background: var(--bg); color: var(--text);
+  }
+  .calc-line { font-size: 12px; color: var(--hint); margin-top: 8px; min-height: 0; }
+  .calc-line:empty { display: none; }
+  .calc-line.warn { color: var(--brak); font-weight: 700; }
+  .row2 { font-size: 12px; color: var(--hint); }
+  .item-line { display: flex; justify-content: space-between; font-size: 13px; padding: 3px 0; }
 </style>
 </head>
 <body>
@@ -368,6 +383,11 @@ new MutationObserver(() => attachDateHints(document.body)).observe(document.body
 attachDateHints(document.body);
 
 const API = '';
+// Дата/время по Ташкенту (а не по UTC телефона/сервера)
+function todayLocal() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
+}
+function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 
@@ -417,19 +437,21 @@ async function init() {
   currentNomenclature = await nomRes.json();
 
   if (me.stages.length === 1) {
-    currentStage = me.stages[0];
-    if (currentStage.form_type === 'photo') {
-      renderPhotoForm(me, currentStage);
-    } else if (currentStage.form_type === 'materials') {
-      renderDrumPicker(me, currentStage);
-    } else if (currentStage.is_roster_stage) {
-      renderShiftGate(me, currentStage);
-    } else {
-      renderForm(me, currentStage, currentNomenclature, null, null);
-      loadToday(telegramId);
-    }
+    openStage(me, me.stages[0]);
   } else {
     renderStagePicker(me);
+  }
+}
+
+function openStage(me, stage) {
+  currentStage = stage;
+  if (stage.form_type === 'materials') {
+    renderDrumPicker(me, stage);
+  } else if (stage.is_roster_stage) {
+    renderShiftGate(me, stage);
+  } else {
+    renderForm(me, stage, currentNomenclature, null, null);
+    loadToday(me.telegram_id);
   }
 }
 
@@ -448,26 +470,13 @@ function renderStagePicker(me) {
     </main>
   `;
   app.querySelectorAll('[data-stage-code]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const stage = me.stages.find(s => s.code === btn.dataset.stageCode);
-      currentStage = stage;
-      if (stage.form_type === 'photo') {
-        renderPhotoForm(me, stage);
-      } else if (stage.form_type === 'materials') {
-        renderDrumPicker(me, stage);
-      } else if (stage.is_roster_stage) {
-        renderShiftGate(me, stage);
-      } else {
-        renderForm(me, stage, currentNomenclature, null, null);
-        loadToday(me.telegram_id);
-      }
-    });
+    btn.addEventListener('click', () => openStage(me, me.stages.find(s => s.code === btn.dataset.stageCode)));
   });
 }
 
 // --- Смена старшего (для ROSTER_STAGES): проверяем статус, ведём либо на открытие, либо на список сотрудников ---
 async function renderShiftGate(me, stage) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
   const res = await fetch(`${API}/api/shift-status?telegram_id=${me.telegram_id}&stage=${stage.code}&entry_date=${today}`);
   const data = await res.json();
@@ -530,7 +539,7 @@ async function renderOpenShiftScreen(me, stage) {
     if (!confirm(`Открыть смену на этапе «${stage.title}»?\n\nСостав: ${names}\n\nПосле открытия состав сменить нельзя — только закрыть смену и открыть новую.`)) {
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayLocal();
     try {
       const res = await fetch(`${API}/api/shift/open`, {
         method: 'POST',
@@ -618,184 +627,104 @@ function renderEmployeePicker(me, stage, shift, employees) {
   loadToday(me.telegram_id);
 }
 
-function renderPhotoForm(me, stage) {
-  const today = new Date().toISOString().slice(0, 10);
-  const switchLink = me.stages.length > 1
-    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
-    : '';
-
-  app.innerHTML = `
-    <header>
-      <div class="eyebrow">Учёт производства</div>
-      <h1>${stage.title}</h1>
-      <div class="who">${me.full_name} ${switchLink}</div>
-    </header>
-    <main>
-      <div class="date-row">
-        <label>Дата</label>
-        <input type="date" id="entryDate" value="${today}" max="${today}">
-      </div>
-      <div class="photo-card">
-        <label class="photo-upload-btn" id="photoUploadLabel">
-          <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none;">
-          <span id="photoUploadText">📷 Сфотографировать накладную</span>
-        </label>
-        <img id="photoPreview" style="display:none;">
-        <input type="text" id="photoCaption" placeholder="Комментарий (поставщик, № накладной) — необязательно" class="photo-caption-input">
-      </div>
-      <div class="today-log" id="todayPhotosLog"></div>
-    </main>
-    <div class="submit-bar">
-      <button class="submit-btn" id="photoSubmitBtn" disabled>Отправить фото</button>
-    </div>
-  `;
-
-  const photoInput = document.getElementById('photoInput');
-  const preview = document.getElementById('photoPreview');
-  const submitBtn = document.getElementById('photoSubmitBtn');
-  let selectedFile = null;
-
-  photoInput.addEventListener('change', () => {
-    const file = photoInput.files[0];
-    if (!file) return;
-    selectedFile = file;
-    preview.src = URL.createObjectURL(file);
-    preview.style.display = 'block';
-    document.getElementById('photoUploadText').textContent = '📷 Заменить фото';
-    submitBtn.disabled = false;
-  });
-
-  submitBtn.addEventListener('click', async () => {
-    if (!selectedFile) return;
-    submitBtn.disabled = true;
-    submitBtn.textContent = 'Отправка…';
-
-    const fd = new FormData();
-    fd.append('telegram_id', me.telegram_id);
-    fd.append('entry_date', document.getElementById('entryDate').value);
-    fd.append('caption', document.getElementById('photoCaption').value);
-    fd.append('photo', selectedFile);
-
-    try {
-      const res = await fetch(`${API}/api/intake-photo`, { method: 'POST', body: fd });
-      const data = await res.json();
-      if (data.ok) {
-        showToast('Фото отправлено');
-        tg?.HapticFeedback?.notificationOccurred('success');
-        selectedFile = null;
-        photoInput.value = '';
-        preview.style.display = 'none';
-        document.getElementById('photoCaption').value = '';
-        document.getElementById('photoUploadText').textContent = '📷 Сфотографировать накладную';
-        loadTodayPhotos(me.telegram_id);
-      } else if (data.error === 'day_closed') {
-        showToast('Этот день уже закрыт. Обратись к администратору.');
-      } else {
-        showToast('Ошибка при отправке');
-      }
-    } catch (e) {
-      showToast('Ошибка сети');
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Отправить фото';
-    }
-  });
-
-  const switchBtn = document.getElementById('switchStageBtn');
-  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
-
-  loadTodayPhotos(me.telegram_id);
-}
-
+// Экран замесов: барабаны, замесы за сегодня, кнопка "новый замес" (замесов в день может быть много)
 async function renderDrumPicker(me, stage) {
+  const today = todayLocal();
+  app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
+  const batches = await (await fetch(`${API}/api/mixing-batch/today?stage=${stage.code}&entry_date=${today}`)).json();
+  const switchLink = me.stages.length > 1 ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>` : '';
+  const fixedDrum = stage.drums.length === 1;
+
+  const drumBlocks = stage.drums.map(d => {
+    const list = batches.filter(b => b.drum_number === d);
+    const mine = list.find(b => b.status === 'in_progress' && b.telegram_id === me.telegram_id);
+    const open = mine;
+    const rows = list.map(b => `
+      <div class="item-line">
+        <span>Замес ${b.batch_no} · ${b.created_at.slice(11, 16)} <span class="log-stage">${esc(b.code)}</span></span>
+        <span>${b.status === 'completed' ? b.output_quantity + ' кг' : 'в процессе · ' + esc(b.employee_name)}</span>
+      </div>`).join('');
+    return `
+      <div class="batch-progress-card">
+        <div class="row2" style="margin-bottom:6px;"><b>${fixedDrum ? 'Барабан 1 (единственный)' : 'Барабан ' + d}</b> · замесов сегодня: ${list.filter(b => b.status === 'completed').length}</div>
+        ${rows || '<div class="log-stage">Пока нет замесов</div>'}
+        <button class="submit-btn secondary" style="margin-top:10px;" data-drum="${d}">${open ? 'Продолжить замес №' + open.batch_no : '➕ Новый замес'}</button>
+      </div>`;
+  }).join('');
+
   app.innerHTML = `
     <header>
       <div class="eyebrow">Учёт производства</div>
       <h1>${stage.title}</h1>
-      <div class="who">${me.full_name}</div>
+      <div class="who">${esc(me.full_name)} ${switchLink}</div>
     </header>
     <main>
-      <div class="picker-hint">Какой барабан используешь?</div>
-      <button class="stage-pick-btn" data-drum="1">Барабан 1</button>
-      <button class="stage-pick-btn" data-drum="2">Барабан 2</button>
-      <button class="stage-pick-btn" data-drum="3">Барабан 3</button>
+      <div class="picker-hint">${fixedDrum ? 'Барабан один. Начни новый замес или продолжи начатый.' : 'Выбери барабан. На каждом барабане за день можно делать несколько замесов.'}</div>
+      ${drumBlocks}
     </main>
   `;
   app.querySelectorAll('[data-drum]').forEach(btn => {
     btn.addEventListener('click', () => startBatch(me, stage, Number(btn.dataset.drum)));
   });
+  const switchBtn = document.getElementById('switchStageBtn');
+  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 }
 
 async function startBatch(me, stage, drumNumber) {
-  const today = new Date().toISOString().slice(0, 10);
   try {
     const res = await fetch(`${API}/api/mixing-batch/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: today, stage: stage.code, drum_number: drumNumber }),
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: todayLocal(), stage: stage.code, drum_number: drumNumber }),
     });
     const data = await res.json();
-    if (data.error === 'day_closed') {
-      showToast('Этот день уже закрыт. Обратись к администратору.');
-      return;
-    }
+    if (data.error === 'day_closed') { showToast('Этот день уже закрыт. Обратись к администратору.'); return; }
+    if (data.error) { showToast('Ошибка: ' + data.error); return; }
     renderMaterialsForm(me, stage, data.batch, data.materials);
   } catch (e) {
     showToast('Ошибка сети');
   }
 }
 
-async function refreshBatch(me, stage) {
-  const res = await fetch(`${API}/api/mixing-batch/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: currentBatch.entry_date, stage: stage.code, drum_number: currentBatch.drum_number }),
-  });
-  const data = await res.json();
-  renderMaterialsForm(me, stage, data.batch, data.materials);
-}
-
 let currentBatch = null;
 
+async function refreshBatch(me, stage) {
+  await startBatch(me, stage, currentBatch.drum_number);
+}
+
+// Статичный список сырья как в документе 1С: "артикул - название"
 async function renderMaterialsForm(me, stage, batch, alreadyAdded) {
   currentBatch = batch;
   const materials = await (await fetch(`${API}/api/materials?stage=${stage.code}`)).json();
 
   const itemsHtml = materials.map(item => {
-    const searchText = (item.name + ' ' + (item.article || '')).toLowerCase();
+    const label = (item.article ? item.article + ' - ' : '') + item.name;
     return `
-      <div class="item-card" data-id="${item.id}" data-grade="false" data-search="${searchText}">
-        <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
+      <div class="item-card" data-id="${item.id}" data-search="${esc(label.toLowerCase())}">
+        <div class="name">${esc(label)} <span class="unit">${item.unit}</span></div>
         <div class="qty-row">
-          <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
+          <input type="number" min="0" step="any" inputmode="decimal" placeholder="Количество" data-qty>
         </div>
-      </div>
-    `;
+      </div>`;
   }).join('');
 
-  const switchLink = me.stages.length > 1
-    ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
-    : '';
-
   const alreadyAddedHtml = alreadyAdded.length > 0
-    ? `
-      <div class="batch-progress-card">
+    ? `<div class="batch-progress-card">
         <div class="row2" style="margin-bottom:6px;">Уже добавлено в этот замес</div>
-        ${alreadyAdded.map(m => `<div class="item-line"><span>${m.material_name}</span><span>${m.quantity}</span></div>`).join('')}
-      </div>
-    `
+        ${alreadyAdded.map(m => `<div class="item-line"><span>${esc(m.material_name)}</span><span>${m.quantity}</span></div>`).join('')}
+      </div>`
     : `<div class="batch-progress-card empty">Пока ничего не добавлено в этот замес</div>`;
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">Учёт производства</div>
+      <div class="eyebrow">Замес №${batch.batch_no} · барабан ${batch.drum_number}</div>
       <h1>${stage.title}</h1>
-      <div class="who">${me.full_name} ${switchLink}</div>
+      <div class="who">${esc(me.full_name)} <button class="switch-stage-btn" id="backToDrumsBtn">← К замесам</button></div>
     </header>
     <main>
-      <div class="date-row">
-        <label>Барабан</label>
-        <button class="drum-change-btn" id="drumChangeBtn">Барабан ${batch.drum_number} · сменить</button>
+      <div class="batch-progress-card" style="font-size:13px;">
+        <div><b>Код замеса:</b> ${esc(batch.code)}</div>
+        <div class="log-stage">Начат ${esc(batch.created_at)}</div>
       </div>
       ${alreadyAddedHtml}
       <div class="search-row">
@@ -809,43 +738,28 @@ async function renderMaterialsForm(me, stage, batch, alreadyAdded) {
     </div>
   `;
 
-  document.getElementById('drumChangeBtn').addEventListener('click', () => renderDrumPicker(me, stage));
-
+  document.getElementById('backToDrumsBtn').addEventListener('click', () => renderDrumPicker(me, stage));
   document.getElementById('itemSearch').addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
     document.querySelectorAll('#itemsList .item-card').forEach(card => {
-      const match = !q || card.dataset.search.includes(q);
-      card.style.display = match ? '' : 'none';
+      card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
     });
   });
-
   document.getElementById('addMaterialsBtn').addEventListener('click', () => addMaterialsToBatch(me, stage));
   document.getElementById('finishBatchBtn').addEventListener('click', () => renderBatchOutputForm(me, stage, batch, alreadyAdded));
-
-  const switchBtn = document.getElementById('switchStageBtn');
-  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 }
 
 async function addMaterialsToBatch(me, stage) {
   const btn = document.getElementById('addMaterialsBtn');
-  const cards = document.querySelectorAll('.item-card');
   const items = [];
-
-  cards.forEach(card => {
-    const id = Number(card.dataset.id);
-    const input = card.querySelector('[data-qty]');
-    const qty = Number(input.value || 0);
-    if (qty > 0) items.push({ material_id: id, quantity: qty });
+  document.querySelectorAll('#itemsList .item-card').forEach(card => {
+    const qty = Number(card.querySelector('[data-qty]').value || 0);
+    if (qty > 0) items.push({ material_id: Number(card.dataset.id), quantity: qty });
   });
-
-  if (items.length === 0) {
-    showToast('Заполни хотя бы одну позицию');
-    return;
-  }
+  if (items.length === 0) { showToast('Заполни хотя бы одну позицию'); return; }
 
   btn.disabled = true;
   btn.textContent = 'Сохранение…';
-
   try {
     const res = await fetch(`${API}/api/mixing-batch/add-materials`, {
       method: 'POST',
@@ -880,8 +794,8 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
     </header>
     <main>
       <div class="batch-progress-card">
-        <div class="row2" style="margin-bottom:6px;">Внесено сырья в замес (барабан ${batch.drum_number})</div>
-        ${alreadyAdded.map(m => `<div class="item-line"><span>${m.material_name}</span><span>${m.quantity}</span></div>`).join('')}
+        <div class="row2" style="margin-bottom:6px;">Замес №${batch.batch_no} · барабан ${batch.drum_number} · ${esc(batch.code)}</div>
+        ${alreadyAdded.map(m => `<div class="item-line"><span>${esc(m.material_name)}</span><span>${m.quantity}</span></div>`).join('')}
       </div>
       <div class="photo-card">
         <label style="display:block; margin-bottom:8px; color:var(--hint); font-size:13px;">Сколько фактически получилось на выходе? (кг)</label>
@@ -912,11 +826,7 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
       if (data.ok) {
         showToast('Замес завершён');
         tg?.HapticFeedback?.notificationOccurred('success');
-        if (me.stages.length > 1) {
-          renderStagePicker(me);
-        } else {
-          renderDrumPicker(me, stage);
-        }
+        renderDrumPicker(me, stage);
       } else {
         showToast('Ошибка: ' + (data.error || 'неизвестная'));
       }
@@ -929,55 +839,42 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
   });
 }
 
-async function loadTodayPhotos(telegramId) {
-  const res = await fetch(`${API}/api/today-photos/${telegramId}`);
-  const rows = await res.json();
-  const el = document.getElementById('todayPhotosLog');
-  if (!el) return;
-  if (rows.length === 0) {
-    el.innerHTML = '';
-    return;
-  }
-  el.innerHTML = `
-    <h2>Отправлено сегодня (${rows.length})</h2>
-    ${rows.map(r => `
-      <div class="log-row">
-        <span>📷 ${r.caption || 'Накладная'}</span>
-        <span class="t">${r.created_at.slice(11, 16)}</span>
-      </div>
-    `).join('')}
-  `;
-}
+// Форма документа этапа: шапка (линия/вагон) + карточка на каждую модель с полями этапа (как в 1С)
+let lastHeaderValue = {};
 
 function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
-  const today = new Date().toISOString().slice(0, 10);
-  const gradeOptions = stage.grade_options;
+  const today = todayLocal();
+  const grades = stage.grade_options;
+  const fields = stage.fields || [];
+  const cols = grades ? grades.length : fields.length;
 
   const itemsHtml = nomenclature.map(item => {
-    const searchText = (item.name + ' ' + (item.article || '')).toLowerCase();
-    if (gradeOptions && gradeOptions.length > 0) {
-      return `
-        <div class="item-card" data-id="${item.id}" data-grade="true" data-search="${searchText}">
-          <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
-          <div class="grade-grid" style="grid-template-columns: repeat(${gradeOptions.length}, 1fr);">
-            ${gradeOptions.map(g => `
-              <div class="grade-cell ${g.countsAsGood === false ? 'brak' : ''}">
-                <label>${g.label}</label>
-                <input type="number" min="0" inputmode="numeric" data-grade-code="${g.code}" placeholder="0">
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `;
+    const label = item.name + (item.article ? ` (${item.article})` : '');
+    const search = esc(label.toLowerCase());
+    let body;
+    if (grades) {
+      body = `<div class="grade-grid" style="grid-template-columns: repeat(${cols}, 1fr);">
+        ${grades.map(g => `
+          <div class="grade-cell">
+            <label>${g.label}</label>
+            <input type="number" min="0" step="1" inputmode="numeric" placeholder="0" data-grade="${g.code}" data-field="quantity">
+          </div>`).join('')}
+      </div>`;
+    } else {
+      body = `<div class="grade-grid" style="grid-template-columns: repeat(${Math.min(cols, 4)}, 1fr);">
+        ${fields.map(f => `
+          <div class="grade-cell ${f.bad ? 'brak' : ''}">
+            <label>${f.label}</label>
+            <input type="number" min="0" step="1" inputmode="numeric" placeholder="0" data-field="${f.key}">
+          </div>`).join('')}
+      </div>
+      <div class="calc-line" data-calc></div>`;
     }
     return `
-      <div class="item-card" data-id="${item.id}" data-grade="false" data-search="${searchText}">
-        <div class="name">${item.name}${item.article ? ` (${item.article})` : ''} <span class="unit">${item.unit}</span></div>
-        <div class="qty-row">
-          <input type="number" min="0" inputmode="numeric" placeholder="Количество" data-qty>
-        </div>
-      </div>
-    `;
+      <div class="item-card" data-id="${item.id}" data-search="${search}">
+        <div class="name">${esc(label)} <span class="unit">${item.unit}</span></div>
+        ${body}
+      </div>`;
   }).join('');
 
   const isRoster = !!employeeId;
@@ -985,17 +882,29 @@ function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
     ? `<button class="switch-stage-btn" id="backToEmployeesBtn">← К списку сотрудников</button>`
     : (me.stages.length > 1 ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>` : '');
 
+  const headerHtml = stage.header ? `
+    <div class="date-row">
+      <label>${stage.header.label}</label>
+      <span class="stepper">
+        <button type="button" id="hdrMinus">−</button>
+        <input type="number" min="1" step="1" inputmode="numeric" id="hdrValue" value="${lastHeaderValue[stage.code] || ''}" placeholder="№">
+        <button type="button" id="hdrPlus">+</button>
+      </span>
+    </div>` : '';
+
   app.innerHTML = `
     <header>
-      <div class="eyebrow">${isRoster ? `Вносишь за: ${employeeName}` : 'Учёт производства'}</div>
+      <div class="eyebrow">${isRoster ? `Вносишь за: ${esc(employeeName)}` : 'Учёт производства'}</div>
       <h1>${stage.title}</h1>
-      <div class="who">${me.full_name} ${backBtn}</div>
+      <div class="who">${esc(me.full_name)} ${backBtn}</div>
     </header>
     <main>
       <div class="date-row">
         <label>Дата смены</label>
         <input type="date" id="entryDate" value="${today}" max="${today}">
       </div>
+      ${headerHtml}
+      ${stage.hint ? `<div class="picker-hint">${esc(stage.hint)}</div>` : ''}
       <div class="search-row">
         <input type="text" id="itemSearch" placeholder="🔍 Поиск по названию или артикулу" autocomplete="off">
       </div>
@@ -1003,23 +912,45 @@ function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
       <div class="today-log" id="todayLog"></div>
     </main>
     <div class="submit-bar">
-      <button class="submit-btn" id="submitBtn">Сохранить${isRoster ? ` за ${employeeName}` : ''}</button>
+      <button class="submit-btn" id="submitBtn">Сохранить${isRoster ? ` за ${esc(employeeName)}` : ''}</button>
     </div>
   `;
 
   document.getElementById('itemSearch').addEventListener('input', (e) => {
     const q = e.target.value.trim().toLowerCase();
     document.querySelectorAll('#itemsList .item-card').forEach(card => {
-      const match = !q || card.dataset.search.includes(q);
-      card.style.display = match ? '' : 'none';
+      card.style.display = (!q || card.dataset.search.includes(q)) ? '' : 'none';
     });
   });
 
-  document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage, employeeId, employeeName, shift));
+  // Живой пересчёт: формовка — "вернётся в глину", оправка/глазурирование — "квалифицированное"
+  document.querySelectorAll('#itemsList .item-card').forEach(card => {
+    const calc = card.querySelector('[data-calc]');
+    if (!calc) return;
+    const val = k => Number((card.querySelector(`[data-field="${k}"]`) || {}).value || 0);
+    const update = () => {
+      if (stage.code === 'molding') {
+        const t = val('qty_total'), g = val('quantity');
+        calc.textContent = t || g ? (g > t ? '⚠ Годных больше, чем залито' : `Вернётся в глину: ${t - g} шт`) : '';
+        calc.classList.toggle('warn', g > t);
+      } else if (stage.code === 'fettling' || stage.code === 'glazing') {
+        const t = val('qty_total'), d = val('qty_defect');
+        calc.textContent = t || d ? (d > t ? '⚠ Брак больше общего количества' : `Квалифицированное количество: ${t - d}`) : '';
+        calc.classList.toggle('warn', d > t);
+      }
+    };
+    card.addEventListener('input', update);
+  });
 
+  if (stage.header) {
+    const hv = document.getElementById('hdrValue');
+    document.getElementById('hdrMinus').addEventListener('click', () => { hv.value = Math.max(1, Number(hv.value || 1) - 1); });
+    document.getElementById('hdrPlus').addEventListener('click', () => { hv.value = Number(hv.value || 0) + 1; });
+  }
+
+  document.getElementById('submitBtn').addEventListener('click', () => submit(me, stage, employeeId, employeeName, shift));
   const backToEmpBtn = document.getElementById('backToEmployeesBtn');
   if (backToEmpBtn) backToEmpBtn.addEventListener('click', () => renderShiftGate(me, stage));
-
   const switchBtn = document.getElementById('switchStageBtn');
   if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
 }
@@ -1027,57 +958,61 @@ function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
 async function submit(me, stage, employeeId, employeeName, shift) {
   const btn = document.getElementById('submitBtn');
   const entryDate = document.getElementById('entryDate').value;
-  const cards = document.querySelectorAll('.item-card');
   const items = [];
 
-  cards.forEach(card => {
+  let header = {};
+  if (stage.header) {
+    const hv = Number(document.getElementById('hdrValue').value || 0);
+    if (!Number.isInteger(hv) || hv < 1) { showToast(`Укажи: ${stage.header.label}`); return; }
+    header[stage.header.key] = hv;
+    lastHeaderValue[stage.code] = hv;
+  }
+
+  document.querySelectorAll('#itemsList .item-card').forEach(card => {
     const id = Number(card.dataset.id);
-    if (card.dataset.grade === 'true') {
-      card.querySelectorAll('[data-grade-code]').forEach(input => {
+    if (stage.grade_options) {
+      card.querySelectorAll('[data-grade]').forEach(input => {
         const qty = Number(input.value || 0);
-        if (qty > 0) {
-          items.push({ nomenclature_id: id, quantity: qty, grade: input.dataset.gradeCode });
-        }
+        if (qty > 0) items.push({ nomenclature_id: id, grade: input.dataset.grade, values: { quantity: qty } });
       });
     } else {
-      const input = card.querySelector('[data-qty]');
-      const qty = Number(input.value || 0);
-      if (qty > 0) {
-        items.push({ nomenclature_id: id, quantity: qty });
-      }
+      const values = {};
+      let any = false;
+      card.querySelectorAll('[data-field]').forEach(input => {
+        const v = Number(input.value || 0);
+        values[input.dataset.field] = v;
+        if (v > 0) any = true;
+      });
+      if (any) items.push({ nomenclature_id: id, values });
     }
   });
 
-  if (items.length === 0) {
-    showToast('Заполни хотя бы одну позицию');
-    return;
-  }
+  if (items.length === 0) { showToast('Заполни хотя бы одну позицию'); return; }
 
   btn.disabled = true;
   btn.textContent = 'Отправка…';
-
   try {
     const res = await fetch(`${API}/api/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        telegram_id: me.telegram_id,
-        entry_date: entryDate,
-        stage: stage.code,
-        employee_id: employeeId || undefined,
-        items,
+        telegram_id: me.telegram_id, entry_date: entryDate, stage: stage.code,
+        employee_id: employeeId || undefined, header, items,
       }),
     });
     const data = await res.json();
     if (data.ok) {
-      showToast(`Сохранено: ${data.saved} позиций`);
+      showToast(`Сохранено: ${data.saved} поз. · ${data.codes[0]}${data.codes.length > 1 ? '…' : ''}`);
       tg?.HapticFeedback?.notificationOccurred('success');
-      document.querySelectorAll('input[type="number"]').forEach(i => i.value = '');
+      document.querySelectorAll('#itemsList input[type="number"]').forEach(i => i.value = '');
+      document.querySelectorAll('[data-calc]').forEach(c => c.textContent = '');
       loadToday(me.telegram_id);
     } else if (data.error === 'day_closed') {
       showToast('Этот день уже закрыт. Обратись к администратору.');
     } else if (data.error === 'shift_not_open') {
       showToast('Смена уже закрыта. Обратись к администратору.');
+    } else if (data.message) {
+      showToast(data.message);
     } else {
       showToast('Ошибка при сохранении');
     }
@@ -1094,15 +1029,16 @@ async function loadToday(telegramId) {
   const rows = await res.json();
   const el = document.getElementById('todayLog');
   if (!el) return;
-  if (rows.length === 0) {
-    el.innerHTML = '';
-    return;
-  }
+  if (rows.length === 0) { el.innerHTML = ''; return; }
   el.innerHTML = `
     <h2>Внесено сегодня</h2>
     ${rows.map(r => `
       <div class="log-row" data-entry-id="${r.id}">
-        <span>${r.employee_name ? `<b>${r.employee_name}:</b> ` : ''}${r.nomenclature_name}${r.grade ? ' · ' + r.grade : ''} — ${r.quantity} <span class="log-stage">(${r.stage_title}${r.drum_number ? ', барабан ' + r.drum_number : ''})</span></span>
+        <span>
+          ${r.employee_name ? `<b>${esc(r.employee_name)}:</b> ` : ''}${esc(r.nomenclature_name)} — ${esc(r.description)}
+          <span class="log-stage">(${esc(r.stage_title)})</span>
+          <div class="log-stage">${esc(r.op_code || '')}</div>
+        </span>
         <span class="right">
           <span class="t">${r.created_at.slice(11, 16)}</span>
           <button class="del-btn" data-del-entry="${r.id}" title="Удалить запись">✕</button>
@@ -1113,7 +1049,7 @@ async function loadToday(telegramId) {
 
   el.querySelectorAll('[data-del-entry]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Удалить эту запись?')) return;
+      if (!confirm('Удалить эту запись? В журнале проводок она останется как отменённая.')) return;
       try {
         const res = await fetch(`${API}/api/entries/${btn.dataset.delEntry}?telegram_id=${telegramId}`, { method: 'DELETE' });
         const data = await res.json();

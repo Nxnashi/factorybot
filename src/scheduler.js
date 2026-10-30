@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const { db, STAGES } = require('./db');
+const { todayLocal } = require('./util');
 const { buildReportWorkbook, reportFilename } = require('./reportGenerator');
 
 function getStageMeta(code) {
@@ -16,7 +17,7 @@ function parseTimeToCron(time) {
 }
 
 async function sendDailyReport(bot) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const admins = db.prepare('SELECT telegram_id FROM users WHERE is_admin = 1').all();
 
   if (admins.length === 0) {
@@ -55,7 +56,7 @@ const REMINDER_TIME = process.env.REMINDER_TIME || '18:00';
 const REMINDER_TIMEZONE = process.env.REMINDER_TIMEZONE || REPORT_TIMEZONE;
 
 async function checkAndSendReminders(bot) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocal();
   const workers = db.prepare('SELECT telegram_id, full_name, stage FROM users WHERE is_admin = 0').all();
   const admins = db.prepare('SELECT telegram_id FROM users WHERE is_admin = 1').all();
 

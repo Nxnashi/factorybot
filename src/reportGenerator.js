@@ -1,166 +1,172 @@
 const ExcelJS = require('exceljs');
 const { db, STAGES } = require('./db');
+const { buildMixingMatrix } = require('./mixing');
 
-const GRADE_LABELS = { '1': 'Сорт 1', '2': 'Сорт 2', brak: 'Брак', good: 'Годно', return: 'Возврат' };
+const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
+const STATUS_LABELS = { completed: 'Завершён', in_progress: 'В процессе', cancelled: 'Отменён' };
+const POSTING_STATUS = { posted: 'Проведено', cancelled: 'Отменено' };
+
+function styleHeader(sheet, rowNumber = 1) {
+  sheet.getRow(rowNumber).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
+}
+const time = ts => (ts ? String(ts).slice(11, 16) : '');
+
+// Колонки по этапам (повторяют документы 1С)
+const DOC_COLUMNS = {
+  molding: [
+    { header: 'Линия', key: 'line_no', width: 8 },
+    { header: 'Залито, шт', key: 'qty_total', width: 12 },
+    { header: 'Годных, шт', key: 'quantity', width: 12 },
+    { header: 'Возврат в глину, шт', key: 'qty_defect', width: 18 },
+  ],
+  fettling: [
+    { header: 'Общее количество', key: 'qty_total', width: 16 },
+    { header: 'Брак', key: 'qty_defect', width: 10 },
+    { header: 'Квалифицированное количество', key: 'quantity', width: 26 },
+  ],
+  glazing: [
+    { header: 'Общее количество', key: 'qty_total', width: 16 },
+    { header: 'Брак', key: 'qty_defect', width: 10 },
+    { header: 'Квалифицированное количество', key: 'quantity', width: 26 },
+  ],
+  kiln: [
+    { header: 'Вагон', key: 'wagon_no', width: 8 },
+    { header: 'Количество, шт', key: 'quantity', width: 14 },
+  ],
+  sorting: [
+    { header: 'Сорт-1', key: 'qty_s1', width: 10 },
+    { header: 'Сорт-2', key: 'qty_s2', width: 10 },
+    { header: 'Ремонт', key: 'qty_repair', width: 10 },
+    { header: 'Брак/Бой', key: 'qty_defect', width: 10 },
+  ],
+  finished: [
+    { header: 'Сорт', key: 'grade', width: 8 },
+    { header: 'Количество, шт', key: 'quantity', width: 14 },
+  ],
+};
 
 async function buildReportWorkbook(from, to) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Factory Tracker';
   workbook.created = new Date();
 
-  const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
-
-  const summarySheet = workbook.addWorksheet('Сводка');
-  summarySheet.columns = [
-    { header: 'Дата', key: 'entry_date', width: 12 },
-    { header: 'Этап', key: 'stage_title', width: 28 },
-    { header: 'Сотрудник', key: 'employee_name', width: 22 },
-    { header: 'Старший', key: 'entered_by', width: 20 },
-    { header: 'Номенклатура', key: 'nomenclature_name', width: 20 },
-    { header: 'Кол-во', key: 'quantity', width: 10 },
-    { header: 'Сорт', key: 'grade_label', width: 12 },
-    { header: 'Комментарий', key: 'comment', width: 25 },
-    { header: 'Время', key: 'created_at', width: 18 },
-  ];
-  summarySheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
-
   const stageTitleByCode = Object.fromEntries(STAGES.map(s => [s.code, s.title]));
 
   const allRows = db.prepare(`
-    SELECT e.entry_date, e.stage, e.employee_name, e.entered_by,
-           n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name,
-           e.quantity, e.grade, e.comment, e.created_at
+    SELECT e.*, n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
     WHERE e.entry_date BETWEEN ? AND ?
-    ORDER BY e.entry_date, e.stage, e.created_at
+    ORDER BY e.entry_date, e.stage, e.created_at, e.id
   `).all(from, to);
 
-  allRows.forEach(r => {
-    summarySheet.addRow({
-      entry_date: r.entry_date,
+  // --- Сводка: все документы по порядку этапов ---
+  const summary = workbook.addWorksheet('Сводка');
+  summary.columns = [
+    { header: 'Код операции', key: 'op_code', width: 20 },
+    { header: 'Дата', key: 'entry_date', width: 12 },
+    { header: 'Время', key: 'time', width: 8 },
+    { header: 'Этап', key: 'stage_title', width: 20 },
+    { header: 'Сотрудник', key: 'employee_name', width: 22 },
+    { header: 'Старший', key: 'entered_by', width: 20 },
+    { header: 'Модель', key: 'nomenclature_name', width: 30 },
+    { header: 'Линия / вагон', key: 'place', width: 13 },
+    { header: 'Всего', key: 'qty_total', width: 10 },
+    { header: 'Годных / вышло', key: 'quantity', width: 15 },
+    { header: 'Брак / возврат', key: 'qty_defect', width: 14 },
+    { header: 'Ремонт', key: 'qty_repair', width: 10 },
+    { header: 'Сорт-1', key: 'qty_s1', width: 8 },
+    { header: 'Сорт-2', key: 'qty_s2', width: 8 },
+    { header: 'Сорт', key: 'grade', width: 8 },
+    { header: 'Комментарий', key: 'comment', width: 25 },
+  ];
+  styleHeader(summary);
+  const orderIndex = Object.fromEntries(STAGES.map((s, i) => [s.code, i]));
+  [...allRows]
+    .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || (orderIndex[a.stage] ?? 99) - (orderIndex[b.stage] ?? 99) || a.id - b.id)
+    .forEach(r => summary.addRow({
+      ...r,
+      time: time(r.created_at),
       stage_title: stageTitleByCode[r.stage] || r.stage,
-      employee_name: r.employee_name,
       entered_by: r.entered_by || '',
-      nomenclature_name: r.nomenclature_name,
-      quantity: r.quantity,
-      grade_label: r.grade ? (GRADE_LABELS[r.grade] || r.grade) : '',
+      place: r.line_no ? `Линия ${r.line_no}` : (r.wagon_no ? `Вагон ${r.wagon_no}` : ''),
       comment: r.comment || '',
-      created_at: r.created_at,
-    });
-  });
+    }));
 
+  // --- Листы по этапам ---
   for (const stage of STAGES) {
     const sheet = workbook.addWorksheet(stage.title.slice(0, 31));
 
     if (stage.formType === 'materials') {
-      sheet.columns = [
-        { header: 'Дата', key: 'entry_date', width: 12 },
-        { header: 'Сотрудник', key: 'employee_name', width: 22 },
-        { header: 'Барабан', key: 'drum_number', width: 10 },
-        { header: 'Сырьё', key: 'material_name', width: 30 },
-        { header: 'Кол-во (кг)', key: 'quantity', width: 12 },
-        { header: 'Комментарий', key: 'comment', width: 25 },
-        { header: 'Время', key: 'created_at', width: 18 },
-      ];
-      sheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
+      // Матрица как в 1С: Замес 1..N + Сумма, отдельный блок на дату и барабан
+      const groups = buildMixingMatrix(stage.code, from, to);
+      sheet.getColumn(1).width = 12;
+      sheet.getColumn(2).width = 44;
+      for (let c = 3; c <= 12; c++) sheet.getColumn(c).width = 16;
 
-      const materialRows = db.prepare(`
-        SELECT me.entry_date, me.employee_name, me.drum_number,
-               m.name || CASE WHEN m.article IS NOT NULL THEN ' (' || m.article || ')' ELSE '' END AS material_name,
-               me.quantity, me.comment, me.created_at
-        FROM material_entries me
-        JOIN materials m ON m.id = me.material_id
-        WHERE me.stage = ? AND me.entry_date BETWEEN ? AND ?
-        ORDER BY me.entry_date, me.created_at
-      `).all(stage.code, from, to);
-
-      materialRows.forEach(r => {
-        sheet.addRow({
-          entry_date: r.entry_date,
-          employee_name: r.employee_name,
-          drum_number: r.drum_number || '',
-          material_name: r.material_name,
-          quantity: r.quantity,
-          comment: r.comment || '',
-          created_at: r.created_at,
-        });
-      });
-
-      const batches = db.prepare(`
-        SELECT entry_date, employee_name, drum_number, output_quantity, status
-        FROM mixing_batches
-        WHERE stage = ? AND entry_date BETWEEN ? AND ?
-        ORDER BY entry_date, created_at
-      `).all(stage.code, from, to);
-
-      if (batches.length > 0) {
+      if (groups.length === 0) sheet.addRow(['За выбранный период замесов нет']);
+      for (const g of groups) {
+        const title = sheet.addRow([`Дата ${g.entry_date} · Барабан №${g.drum_number}`]);
+        title.font = { bold: true, size: 12 };
+        const head = sheet.addRow(['Код', 'Номенклатура', ...g.batches.map(b => `Замес ${b.batch_no}`), 'Сумма']);
+        styleHeader(sheet, head.number);
+        const codeRow = sheet.addRow(['', 'Код замеса', ...g.batches.map(b => b.code || ''), '']);
+        codeRow.font = { italic: true, color: { argb: 'FF666666' } };
+        sheet.addRow(['', 'Время / сотрудник', ...g.batches.map(b => `${b.time} · ${b.employee_name}`), '']).font = { italic: true, color: { argb: 'FF666666' } };
+        for (const r of g.rows) {
+          if (r.sum === 0) continue;
+          sheet.addRow([r.article || '', r.name, ...r.values.map(v => v || ''), r.sum]);
+        }
+        const totalRow = sheet.addRow(['', 'Итого сырья, кг', ...g.totals, g.totals_sum]);
+        totalRow.font = { bold: true };
+        const outRow = sheet.addRow(['', 'Выход, кг', ...g.batches.map(b => (b.output_quantity == null ? STATUS_LABELS[b.status] || '' : b.output_quantity)), g.output_sum]);
+        outRow.font = { bold: true };
         sheet.addRow([]);
-        const summaryHeaderRow = sheet.addRow(['Сводка по замесам', '', '', '', '', '', '']);
-        summaryHeaderRow.font = { bold: true };
-        const subHeaderRow = sheet.addRow(['Дата', 'Сотрудник', 'Барабан', 'Статус', 'Выход (кг)', '', '']);
-        subHeaderRow.eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
-        const STATUS_LABELS = { completed: 'Завершён', in_progress: 'В процессе', cancelled: 'Отменён' };
-        batches.forEach(b => {
-          sheet.addRow([b.entry_date, b.employee_name, b.drum_number, STATUS_LABELS[b.status] || b.status, b.output_quantity || '']);
-        });
       }
       continue;
     }
 
-    if (stage.formType === 'photo') {
-      sheet.columns = [
-        { header: 'Дата', key: 'entry_date', width: 12 },
-        { header: 'Сотрудник', key: 'employee_name', width: 22 },
-        { header: 'Комментарий', key: 'caption', width: 35 },
-        { header: 'Время', key: 'created_at', width: 18 },
-      ];
-      sheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
-
-      const photoRows = db.prepare(`
-        SELECT entry_date, employee_name, caption, created_at
-        FROM intake_photos
-        WHERE entry_date BETWEEN ? AND ?
-        ORDER BY entry_date, created_at
-      `).all(from, to);
-
-      photoRows.forEach(r => {
-        sheet.addRow({
-          entry_date: r.entry_date,
-          employee_name: r.employee_name,
-          caption: r.caption || '',
-          created_at: r.created_at,
-        });
-      });
-      continue;
-    }
-
     sheet.columns = [
+      { header: 'Код операции', key: 'op_code', width: 20 },
       { header: 'Дата', key: 'entry_date', width: 12 },
+      { header: 'Время', key: 'time', width: 8 },
       { header: 'Сотрудник', key: 'employee_name', width: 22 },
       { header: 'Старший', key: 'entered_by', width: 20 },
-      { header: 'Номенклатура', key: 'nomenclature_name', width: 20 },
-      { header: 'Кол-во', key: 'quantity', width: 10 },
-      ...(stage.needsGrade ? [{ header: 'Сорт', key: 'grade_label', width: 12 }] : []),
+      { header: 'Модель', key: 'nomenclature_name', width: 32 },
+      ...(DOC_COLUMNS[stage.code] || []),
       { header: 'Комментарий', key: 'comment', width: 25 },
-      { header: 'Время', key: 'created_at', width: 18 },
     ];
-    sheet.getRow(1).eachCell(c => { c.fill = headerFill; c.font = { bold: true }; });
-
-    const stageRows = allRows.filter(r => r.stage === stage.code);
-    stageRows.forEach(r => {
-      sheet.addRow({
-        entry_date: r.entry_date,
-        employee_name: r.employee_name,
-        entered_by: r.entered_by || '',
-        nomenclature_name: r.nomenclature_name,
-        quantity: r.quantity,
-        grade_label: r.grade ? (GRADE_LABELS[r.grade] || r.grade) : '',
-        comment: r.comment || '',
-        created_at: r.created_at,
-      });
-    });
+    styleHeader(sheet);
+    allRows.filter(r => r.stage === stage.code).forEach(r => sheet.addRow({
+      ...r, time: time(r.created_at), entered_by: r.entered_by || '', comment: r.comment || '',
+    }));
   }
+
+  // --- Журнал проводок ---
+  const journal = workbook.addWorksheet('Журнал проводок');
+  journal.columns = [
+    { header: 'Код', key: 'op_code', width: 22 },
+    { header: 'Родитель (замес)', key: 'parent_code', width: 22 },
+    { header: 'Дата', key: 'entry_date', width: 12 },
+    { header: 'Дата и время проводки', key: 'created_at', width: 20 },
+    { header: 'Этап', key: 'stage_title', width: 20 },
+    { header: 'Сотрудник', key: 'actor_name', width: 22 },
+    { header: 'Старший', key: 'entered_by', width: 20 },
+    { header: 'Содержание', key: 'summary', width: 70 },
+    { header: 'Кол-во', key: 'qty', width: 10 },
+    { header: 'Статус', key: 'status_label', width: 12 },
+    { header: 'Отменил', key: 'cancelled_by', width: 18 },
+    { header: 'Когда отменено', key: 'cancelled_at', width: 20 },
+  ];
+  styleHeader(journal);
+  db.prepare('SELECT * FROM postings WHERE entry_date BETWEEN ? AND ? ORDER BY created_at, id').all(from, to).forEach(p => {
+    journal.addRow({
+      ...p,
+      stage_title: stageTitleByCode[p.stage] || p.stage,
+      status_label: POSTING_STATUS[p.status] || p.status,
+      parent_code: p.parent_code || '', entered_by: p.entered_by || '', cancelled_by: p.cancelled_by || '', cancelled_at: p.cancelled_at || '',
+    });
+  });
 
   return workbook;
 }

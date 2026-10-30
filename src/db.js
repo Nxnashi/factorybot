@@ -1,49 +1,88 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const dbPath = process.env.DB_PATH || path.join(__dirname, '..', 'factory.db');
-const db = new Database(dbPath);
+const db = new Database(path.join(__dirname, '..', 'factory.db'));
 db.pragma('journal_mode = WAL');
 
-// Этапы производства (фиксированный список, порядок важен для отчёта)
-// formType: 'quantity' — номенклатура готовой продукции, 'photo' — фото документа, 'materials' — сырьё (ТМЦ)
-// gradeOptions — если задано, на этапе вместо простого количества показывается разбивка по этим статусам.
-//   countsAsGood: false — статус не считается потерей в "Балансе" (напр. "Возврат" уходит в переработку, а не теряется)
+const { CLAY_MATERIALS, GLAZE_MATERIALS } = require('./catalog');
+
+// Этапы производства (порядок важен для отчёта). Структура этапов повторяет документы 1С.
+// formType:
+//   'materials' — замес (сырьё по замесам + выход)
+//   'doc'       — документ-строка на сотрудника+модель; поля описаны в fields, шапка (линия/вагон) в header
+// fields: key — колонка в entries; kind: 'in' (вводит рабочий), role: как поле участвует в балансе
+//   total — "поступило в работу", good — "ушло дальше", defect — потери, repair — на ремонт
 const STAGES = [
-  { code: 'intake', title: 'Приход ТМЦ', needsGrade: false, formType: 'photo', gradeOptions: null },
-  { code: 'clay_mixing', title: 'Замес глины', needsGrade: false, formType: 'materials', gradeOptions: null },
-  { code: 'glaze_mixing', title: 'Замес глазури', needsGrade: false, formType: 'materials', gradeOptions: null },
-  { code: 'molding', title: 'Формовочный цех', needsGrade: false, formType: 'quantity', gradeOptions: null },
+  { code: 'clay_mixing', title: 'Глина (замес)', formType: 'materials' },
+  { code: 'glaze_mixing', title: 'Глазурь (замес)', formType: 'materials' },
   {
-    code: 'qc_molding',
-    title: 'QC промежуточный контроль качества',
-    needsGrade: true,
-    formType: 'quantity',
-    gradeOptions: [
-      { code: 'good', label: 'Годно', countsAsGood: true },
-      { code: 'return', label: 'Возврат', countsAsGood: false },
+    code: 'molding', title: 'Формовка', formType: 'doc',
+    header: { key: 'line_no', label: 'Номер линии', min: 1 },
+    fields: [
+      { key: 'qty_total', label: 'Залито, шт' },
+      { key: 'quantity', label: 'Годных, шт' },
     ],
+    // разница залито − годных автоматически возвращается в глину (qty_defect)
+    rule: 'molding',
+    hint: 'Разница (залито − годных) автоматически вернётся в глину',
   },
-  { code: 'glazing', title: 'Глазировка', needsGrade: false, formType: 'quantity', gradeOptions: null },
-  { code: 'kiln', title: 'Печь', needsGrade: false, formType: 'quantity', gradeOptions: null },
-  { code: 'breakage', title: 'Учёт боя после закаливания', needsGrade: false, formType: 'quantity', gradeOptions: null },
   {
-    code: 'qc_final',
-    title: 'Участок сортировки',
-    needsGrade: true,
-    formType: 'quantity',
+    code: 'fettling', title: 'Оправка', formType: 'doc',
+    fields: [
+      { key: 'qty_total', label: 'Общее количество' },
+      { key: 'qty_defect', label: 'Брак', bad: true },
+    ],
+    rule: 'total_defect',
+    hint: 'Квалифицированное количество = общее − брак (считается само)',
+  },
+  {
+    code: 'glazing', title: 'Глазурирование', formType: 'doc',
+    fields: [
+      { key: 'qty_total', label: 'Общее количество' },
+      { key: 'qty_defect', label: 'Брак', bad: true },
+    ],
+    rule: 'total_defect',
+    hint: 'Квалифицированное количество = общее − брак (считается само)',
+  },
+  {
+    code: 'kiln', title: 'Загрузка в печь', formType: 'doc',
+    header: { key: 'wagon_no', label: 'Номер вагона', min: 1 },
+    fields: [{ key: 'quantity', label: 'Количество, шт' }],
+    rule: 'simple',
+    hint: 'Выбери вагон и вноси количество по каждой модели. Другой вагон — смени номер и сохрани ещё раз',
+  },
+  {
+    code: 'sorting', title: 'Сортировка', formType: 'doc',
+    fields: [
+      { key: 'qty_s1', label: 'Сорт-1' },
+      { key: 'qty_s2', label: 'Сорт-2' },
+      { key: 'qty_repair', label: 'Ремонт' },
+      { key: 'qty_defect', label: 'Брак/Бой', bad: true },
+    ],
+    rule: 'sorting',
+  },
+  {
+    code: 'finished', title: 'Готовая продукция', formType: 'doc',
     gradeOptions: [
       { code: '1', label: 'Сорт 1', countsAsGood: true },
       { code: '2', label: 'Сорт 2', countsAsGood: true },
-      { code: 'brak', label: 'Брак', countsAsGood: false },
     ],
+    needsGrade: true,
+    fields: [{ key: 'quantity', label: 'Количество, шт' }],
+    rule: 'simple',
   },
-  { code: 'warehouse_gp', title: 'Склад ГП', needsGrade: false, formType: 'quantity', gradeOptions: null },
 ];
 
-// Этапы, где введена система "старший + состав смены": старший сначала набирает
-// состав смены (кто сегодня работает), потом вносит выработку за каждого сотрудника отдельно
-const ROSTER_STAGES = ['molding', 'qc_molding', 'glazing', 'kiln', 'breakage', 'qc_final', 'warehouse_gp'];
+// Старые этапы: больше не вносятся, но история по ним остаётся видна в админке
+const LEGACY_STAGES = [
+  { code: 'intake', title: 'Приход ТМЦ (старое)', formType: 'legacy' },
+  { code: 'qc_molding', title: 'QC промежуточный (старое)', formType: 'legacy' },
+  { code: 'breakage', title: 'Учёт боя (старое)', formType: 'legacy' },
+  { code: 'qc_final', title: 'Участок сортировки (старое)', formType: 'legacy' },
+];
+
+// Этапы со сменой старшего: старший набирает состав и вносит выработку за каждого сотрудника
+const ROSTER_STAGES = ['molding', 'fettling', 'glazing', 'kiln', 'sorting', 'finished'];
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -159,7 +198,73 @@ CREATE TABLE IF NOT EXISTS foreman_shifts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_foreman_shifts_lookup ON foreman_shifts(telegram_id, stage, entry_date);
+
+-- Журнал проводок: у каждой операции уникальный код; строки не удаляются, только отменяются
+CREATE TABLE IF NOT EXISTS postings (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  op_code      TEXT NOT NULL UNIQUE,
+  parent_code  TEXT,                         -- для строк замеса — код самого замеса
+  stage        TEXT NOT NULL,
+  kind         TEXT NOT NULL DEFAULT 'post', -- 'batch' | 'material' | 'post'
+  entry_date   TEXT NOT NULL,
+  telegram_id  TEXT,
+  actor_name   TEXT,                         -- кто выполнил работу
+  entered_by   TEXT,                         -- кто внёс (старший)
+  ref_table    TEXT,
+  ref_id       INTEGER,
+  summary      TEXT,
+  qty          REAL,
+  status       TEXT NOT NULL DEFAULT 'posted', -- 'posted' | 'cancelled'
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  cancelled_at TEXT,
+  cancelled_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_postings_date ON postings(entry_date, stage);
+CREATE INDEX IF NOT EXISTS idx_postings_ref ON postings(ref_table, ref_id);
+
+-- Заготовки справочников (структура; данные зальём позже)
+CREATE TABLE IF NOT EXISTS tmc_catalog (          -- все ТМЦ
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT 'шт', group_name TEXT,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS semi_products (        -- полуфабрикаты (п/ф)
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT, name TEXT NOT NULL, unit TEXT NOT NULL DEFAULT 'шт', stage TEXT,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS kits (                 -- комплекты готовой продукции
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT, name TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS kit_items (            -- состав комплекта
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kit_id INTEGER NOT NULL,
+  nomenclature_id INTEGER,
+  semi_product_id INTEGER,
+  quantity REAL NOT NULL DEFAULT 1,
+  FOREIGN KEY (kit_id) REFERENCES kits(id)
+);
 `);
+
+function addColumn(table, col, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
+}
+// Новые поля операций (формовка/оправка/глазурирование/сортировка/печь)
+addColumn('entries', 'op_code', 'TEXT');
+addColumn('entries', 'line_no', 'INTEGER');
+addColumn('entries', 'wagon_no', 'INTEGER');
+addColumn('entries', 'qty_total', 'REAL');
+addColumn('entries', 'qty_defect', 'REAL');
+addColumn('entries', 'qty_repair', 'REAL');
+addColumn('entries', 'qty_s1', 'REAL');
+addColumn('entries', 'qty_s2', 'REAL');
+// Замесы: порядковый номер за день по барабану + уникальный код
+addColumn('mixing_batches', 'batch_no', 'INTEGER');
+addColumn('mixing_batches', 'code', 'TEXT');
+addColumn('material_entries', 'op_code', 'TEXT');
 
 // Миграция: если база создана до появления поля article — добавляем колонку
 const nomCols = db.prepare("PRAGMA table_info(nomenclature)").all().map(c => c.name);
@@ -198,12 +303,18 @@ for (const u of legacyMixingUsers) {
 
 // Миграция: если этап был удалён из STAGES (например "Приход ТМЦ"), но кому-то ещё назначен —
 // убираем его из списка этапов пользователя, чтобы не остаться с несуществующим этапом
+const LEGACY_REMAP = { qc_final: 'sorting', breakage: 'sorting', qc_molding: 'molding' };
 const validCodes = new Set(STAGES.map(s => s.code));
+// Ростер: сотрудников старых цехов переносим в новые
+for (const [from, to] of Object.entries(LEGACY_REMAP)) {
+  db.prepare('UPDATE employees SET stage = ? WHERE stage = ?').run(to, from);
+}
 const allUsers = db.prepare('SELECT telegram_id, stage FROM users').all();
 const fixStage = db.prepare('UPDATE users SET stage = ? WHERE telegram_id = ?');
 for (const u of allUsers) {
   const codes = String(u.stage).split(',').map(s => s.trim()).filter(Boolean);
-  const cleaned = codes.filter(c => validCodes.has(c));
+  const remapped = codes.map(c => LEGACY_REMAP[c] || c);
+  const cleaned = remapped.filter((c, i) => validCodes.has(c) && remapped.indexOf(c) === i);
   const finalCodes = cleaned.length > 0 ? cleaned : [STAGES[0].code];
   if (finalCodes.join(',') !== u.stage) {
     fixStage.run(finalCodes.join(','), u.telegram_id);
@@ -224,17 +335,17 @@ if (process.env.ADMIN_TELEGRAM_ID) {
 // Каталог продукции — добавляем при старте те позиции, которых ещё нет (по артикулу),
 // не трогая то, что уже накопилось или было изменено вручную через админку
 const CATALOG = [
-  { name: 'Раковина "Уголок"', article: '1' },
-  { name: 'Раковина "Россо"', article: '2' },
-  { name: 'Раковина "Тюльпан"', article: '3' },
-  { name: 'Раковина "Капля"', article: '4' },
-  { name: 'Раковина "Верона"', article: '5' },
-  { name: '60см. Раковина', article: '6' },
-  { name: '65см. Раковина', article: '7' },
+  { name: 'Раковина "Уголок" с ножкой', article: '1' },
+  { name: 'Раковина "Россо" с ножкой', article: '2' },
+  { name: 'Раковина "Тюльпан" с ножкой', article: '3' },
+  { name: 'Раковина "Капля" с ножкой', article: '4' },
+  { name: 'Раковина "Верона" с ножкой', article: '5' },
+  { name: '60см. Раковина с ножкой', article: '6' },
+  { name: '65см. Раковина с ножкой', article: '7' },
   { name: 'Стандартная ножка для раковины', article: '22' },
-  { name: 'Раковина "Семья"', article: '8' },
+  { name: 'Раковина "Семья" с ножкой', article: '8' },
   { name: 'Ножка "Семья"', article: '23' },
-  { name: 'Раковина "Детская"', article: '9' },
+  { name: 'Раковина "Детская" с ножкой', article: '9' },
   { name: 'Ножка "Детская"', article: '24' },
   { name: 'Раковина "ТВ" под тумбу', article: '12' },
   { name: 'Унитаз "Детский" с бачком', article: '13' },
@@ -256,15 +367,6 @@ for (const item of CATALOG) {
   nextOrder++;
 }
 
-// Миграция: подтягиваем актуальное название из CATALOG для уже существующих артикулов
-// (например уборка "с ножкой" в названиях раковин — ножка теперь отдельная позиция)
-const updateNomName = db.prepare('UPDATE nomenclature SET name = ? WHERE article = ? AND name != ?');
-for (const item of CATALOG) {
-  if (item.article) {
-    updateNomName.run(item.name, item.article, item.name);
-  }
-}
-
 // Дефолтная номенклатура — если таблица совсем пустая (первый запуск без каталога выше)
 const count = db.prepare('SELECT COUNT(*) AS c FROM nomenclature').get().c;
 if (count === 0) {
@@ -273,51 +375,28 @@ if (count === 0) {
   seed.forEach((name, i) => insert.run(name, 'шт', i));
 }
 
-// Каталог сырья (ТМЦ) для замеса глины и замеса глазури — отдельный от готовой продукции,
-// добавляем то, чего ещё нет (по названию+категории), не трогая накопленное
-const MATERIALS_CATALOG = [
-  // Замес глины — с артикулами
-  { name: 'Полевой шпат', article: '1', category: 'clay_mixing' },
-  { name: 'Сырье полевой шпат', article: 'R1', category: 'clay_mixing' },
-  { name: 'Кварц', article: '2', category: 'clay_mixing' },
-  { name: 'Доломит', article: '3', category: 'clay_mixing' },
-  { name: 'Каолин серый обогащенный', article: '4', category: 'clay_mixing' },
-  { name: 'Каолин серый необогащенный', article: 'R4', category: 'clay_mixing' },
-  { name: 'Каолин 30 обогащенный', article: '5', category: 'clay_mixing' },
-  { name: 'Каолин 30 необогащенный', article: 'R5', category: 'clay_mixing' },
-  { name: 'Глинозем', article: 'R7', category: 'clay_mixing' },
-  { name: 'Каолин 78 необогащенный', article: 'R6', category: 'clay_mixing' },
-  { name: 'Каолин 78 обогащенный', article: '6', category: 'clay_mixing' },
-  { name: 'Сода', article: '8', category: 'clay_mixing' },
-  { name: 'Жидкое стекло', article: '9', category: 'clay_mixing' },
-  { name: 'Глинозем', article: '10', category: 'clay_mixing' },
-  { name: 'Вода', article: '11', category: 'clay_mixing' },
-  { name: 'Глина', article: '12', category: 'clay_mixing' },
-  { name: 'Камни для перемолки', article: '13', category: 'clay_mixing' },
-  // Замес глазури — пока без артикулов
-  { name: 'Полевой шпат', article: null, category: 'glaze_mixing' },
-  { name: 'Кварц', article: null, category: 'glaze_mixing' },
-  { name: 'Кальцит', article: null, category: 'glaze_mixing' },
-  { name: 'Тальк', article: null, category: 'glaze_mixing' },
-  { name: 'Оксид алюминия', article: null, category: 'glaze_mixing' },
-  { name: 'Барий карбонат', article: null, category: 'glaze_mixing' },
-  { name: 'Силикат циркония', article: null, category: 'glaze_mixing' },
-  { name: 'Оксид цинка', article: null, category: 'glaze_mixing' },
-  { name: 'Каолин', article: null, category: 'glaze_mixing' },
-  { name: 'КМЦ клей', article: null, category: 'glaze_mixing' },
-];
-const existingMaterials = new Set(
-  db.prepare('SELECT name, category, article FROM materials').all()
-    .map(r => `${r.name}|${r.category}|${r.article || ''}`)
-);
-const maxMatOrderRow = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM materials').get();
-let nextMatOrder = maxMatOrderRow.m + 1;
-const insertMaterial = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order) VALUES (?, ?, ?, ?, ?)');
-for (const m of MATERIALS_CATALOG) {
-  const key = `${m.name}|${m.category}|${m.article || ''}`;
-  if (existingMaterials.has(key)) continue;
-  insertMaterial.run(m.name, m.article, m.category, 'кг', nextMatOrder);
-  nextMatOrder++;
+// Сырьё (ТМЦ) для замесов — СТАТИЧНЫЙ список из src/catalog.js, через админку не меняется.
+// При старте приводим таблицу к каталогу: совпавшие позиции включаем и выставляем порядок,
+// лишние (старые) скрываем — историю по ним не трогаем.
+function syncMaterials(category, list) {
+  const existing = db.prepare('SELECT * FROM materials WHERE category = ?').all(category);
+  const used = new Set();
+  const upd = db.prepare('UPDATE materials SET name = ?, article = ?, active = 1, sort_order = ? WHERE id = ?');
+  const ins = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order) VALUES (?, ?, ?, ?, ?)');
+  list.forEach((m, i) => {
+    const found = existing.find(e => !used.has(e.id) && (e.article || '') === (m.article || '') && e.name === m.name);
+    if (found) { used.add(found.id); upd.run(m.name, m.article, i, found.id); }
+    else ins.run(m.name, m.article, category, 'кг', i);
+  });
+  for (const e of existing) {
+    if (!used.has(e.id) && !list.some(m => (m.article || '') === (e.article || '') && m.name === e.name)) {
+      db.prepare('UPDATE materials SET active = 0 WHERE id = ?').run(e.id);
+    }
+  }
 }
+db.transaction(() => {
+  syncMaterials('clay_mixing', CLAY_MATERIALS);
+  syncMaterials('glaze_mixing', GLAZE_MATERIALS);
+})();
 
-module.exports = { db, STAGES, ROSTER_STAGES };
+module.exports = { db, STAGES, LEGACY_STAGES, ROSTER_STAGES };
