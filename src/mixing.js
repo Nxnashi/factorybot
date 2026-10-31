@@ -41,7 +41,7 @@ function buildMixingMatrix(stage, from, to) {
     const cols = g.batches.map(b => ({
       id: b.id, batch_no: b.batch_no, code: b.code, status: b.status,
       time: (b.created_at || '').slice(11, 16), employee_name: b.employee_name,
-      output_quantity: b.output_quantity,
+      output_quantity: b.output_quantity, calc_quantity: b.calc_quantity,
     }));
     const rows = allMaterials.map(m => {
       const values = g.batches.map(b => qtyBy[`${b.id}|${m.id}`] || 0);

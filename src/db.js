@@ -13,10 +13,10 @@ const { CLAY_MATERIALS, GLAZE_MATERIALS } = require('./catalog');
 // fields: key — колонка в entries; kind: 'in' (вводит рабочий), role: как поле участвует в балансе
 //   total — "поступило в работу", good — "ушло дальше", defect — потери, repair — на ремонт
 const STAGES = [
-  { code: 'clay_mixing', title: 'Глина (замес)', formType: 'materials' },
-  { code: 'glaze_mixing', title: 'Глазурь (замес)', formType: 'materials' },
+  { code: 'clay_mixing', description: 'Замес глины. Выбери барабан (1–3) и начни замес. Вноси сырьё по списку — количество в кг по каждой позиции, можно в несколько приёмов. Итого вес замеса считается сам, при необходимости его можно исправить. За день на барабане можно сделать несколько замесов, у каждого свой код и время.', title: 'Глина (замес)', formType: 'materials' },
+  { code: 'glaze_mixing', description: 'Замес глазури. Барабан всегда один. Начни замес, внеси сырьё по списку (кг). Итого вес замеса считается сам, при необходимости его можно исправить. Замесов в день может быть несколько — у каждого свой код и время.', title: 'Глазурь (замес)', formType: 'materials' },
   {
-    code: 'molding', title: 'Формовка', formType: 'doc',
+    code: 'molding', description: 'Формовка. Открой смену и выбери сотрудника. Укажи номер линии, затем по каждой модели — сколько залито и сколько годных. Разница (залито − годных) автоматически возвращается в глину.', title: 'Формовка', formType: 'doc',
     header: { key: 'line_no', label: 'Номер линии', min: 1 },
     fields: [
       { key: 'qty_total', label: 'Залито, шт' },
@@ -27,7 +27,7 @@ const STAGES = [
     hint: 'Разница (залито − годных) автоматически вернётся в глину',
   },
   {
-    code: 'fettling', title: 'Оправка', formType: 'doc',
+    code: 'fettling', description: 'Оправка. Открой смену, выбери сотрудника. По каждой модели вноси общее количество и брак. Квалифицированное количество (общее − брак) считается автоматически.', title: 'Оправка', formType: 'doc',
     fields: [
       { key: 'qty_total', label: 'Общее количество' },
       { key: 'qty_defect', label: 'Брак', bad: true },
@@ -36,7 +36,7 @@ const STAGES = [
     hint: 'Квалифицированное количество = общее − брак (считается само)',
   },
   {
-    code: 'glazing', title: 'Глазурирование', formType: 'doc',
+    code: 'glazing', description: 'Глазурирование. Открой смену, выбери сотрудника. По каждой модели вноси общее количество и брак. Квалифицированное количество (общее − брак) считается автоматически.', title: 'Глазурирование', formType: 'doc',
     fields: [
       { key: 'qty_total', label: 'Общее количество' },
       { key: 'qty_defect', label: 'Брак', bad: true },
@@ -45,14 +45,14 @@ const STAGES = [
     hint: 'Квалифицированное количество = общее − брак (считается само)',
   },
   {
-    code: 'kiln', title: 'Загрузка в печь', formType: 'doc',
+    code: 'kiln', description: 'Загрузка в печь. Выбери номер вагона и вноси количество по каждой модели, загруженной в этот вагон. Для следующего вагона смени номер и сохрани ещё раз.', title: 'Загрузка в печь', formType: 'doc',
     header: { key: 'wagon_no', label: 'Номер вагона', min: 1 },
     fields: [{ key: 'quantity', label: 'Количество, шт' }],
     rule: 'simple',
     hint: 'Выбери вагон и вноси количество по каждой модели. Другой вагон — смени номер и сохрани ещё раз',
   },
   {
-    code: 'sorting', title: 'Сортировка', formType: 'doc',
+    code: 'sorting', description: 'Сортировка (после обжига). Открой смену, выбери сотрудника. По каждой модели вноси: Сорт-1, Сорт-2, Ремонт и Брак/Бой.', title: 'Сортировка', formType: 'doc',
     fields: [
       { key: 'qty_s1', label: 'Сорт-1' },
       { key: 'qty_s2', label: 'Сорт-2' },
@@ -62,7 +62,7 @@ const STAGES = [
     rule: 'sorting',
   },
   {
-    code: 'finished', title: 'Готовая продукция', formType: 'doc',
+    code: 'finished', description: 'Готовая продукция. Открой смену, выбери сотрудника. По каждой модели вноси количество отдельно по сортам (Сорт 1, Сорт 2).', title: 'Готовая продукция', formType: 'doc',
     gradeOptions: [
       { code: '1', label: 'Сорт 1', countsAsGood: true },
       { code: '2', label: 'Сорт 2', countsAsGood: true },
@@ -264,7 +264,13 @@ addColumn('entries', 'qty_s2', 'REAL');
 // Замесы: порядковый номер за день по барабану + уникальный код
 addColumn('mixing_batches', 'batch_no', 'INTEGER');
 addColumn('mixing_batches', 'code', 'TEXT');
+addColumn('mixing_batches', 'calc_quantity', 'REAL');   // авто-итог веса замеса (сумма сырья)
 addColumn('material_entries', 'op_code', 'TEXT');
+// "Удалено" как в iiko: запись остаётся в базе (история цела), в списках для работы не показывается
+addColumn('materials', 'deleted', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('materials', 'is_custom', 'INTEGER NOT NULL DEFAULT 0');   // добавлено админом, а не из catalog.js
+addColumn('employees', 'deleted', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('nomenclature', 'deleted', 'INTEGER NOT NULL DEFAULT 0');
 
 // Миграция: если база создана до появления поля article — добавляем колонку
 const nomCols = db.prepare("PRAGMA table_info(nomenclature)").all().map(c => c.name);
@@ -379,9 +385,9 @@ if (count === 0) {
 // При старте приводим таблицу к каталогу: совпавшие позиции включаем и выставляем порядок,
 // лишние (старые) скрываем — историю по ним не трогаем.
 function syncMaterials(category, list) {
-  const existing = db.prepare('SELECT * FROM materials WHERE category = ?').all(category);
+  const existing = db.prepare('SELECT * FROM materials WHERE category = ? AND is_custom = 0').all(category);
   const used = new Set();
-  const upd = db.prepare('UPDATE materials SET name = ?, article = ?, active = 1, sort_order = ? WHERE id = ?');
+  const upd = db.prepare('UPDATE materials SET name = ?, article = ?, active = CASE WHEN deleted = 1 THEN 0 ELSE 1 END, sort_order = ? WHERE id = ?');
   const ins = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order) VALUES (?, ?, ?, ?, ?)');
   list.forEach((m, i) => {
     const found = existing.find(e => !used.has(e.id) && (e.article || '') === (m.article || '') && e.name === m.name);

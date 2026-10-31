@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Админка — учёт производства</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/kbd.js" defer></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #f4f2ee);
@@ -271,6 +272,9 @@
   .matrix th.name { background: #EFEAE0; }
   .matrix tr.total td { font-weight: 700; background: #EFEAE0; }
   .matrix .meta td { font-size: 10px; color: var(--hint); }
+  .is-deleted { text-decoration: line-through; opacity: .55; }
+  .mini-btn { font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  .mini-btn.danger { border-color:#b3372c; color:#b3372c; background:none; }
   .posting { border-left: 3px solid var(--accent); }
   .posting.cancelled { opacity: .55; border-left-color: #b3372c; }
   .posting .code { font-family: monospace; font-weight: 700; font-size: 12px; }
@@ -821,8 +825,13 @@ async function renderRosterTab(stages) {
             <div class="row1">${stageTitle(code)}</div>
             ${stageEmployees.map(e => `
               <div class="item-line">
-                <span>${e.full_name} ${e.active ? '' : '(скрыт)'}</span>
-                <button data-toggle-emp="${e.id}" data-active="${e.active}" style="font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg);">${e.active ? 'Скрыть' : 'Показать'}</button>
+                <span class="${e.deleted ? 'is-deleted' : ''}">${esc(e.full_name)} ${!e.deleted && !e.active ? '(скрыт)' : ''}</span>
+                <span style="display:flex; gap:6px;">
+                  ${e.deleted
+                    ? `<button class="mini-btn" data-restore-emp="${e.id}">Восстановить</button>`
+                    : `<button class="mini-btn" data-toggle-emp="${e.id}" data-active="${e.active}">${e.active ? 'Скрыть' : 'Показать'}</button>
+                       <button class="mini-btn danger" data-del-emp="${e.id}" data-name="${esc(e.full_name)}">Удалить</button>`}
+                </span>
               </div>
             `).join('')}
           </div>
@@ -854,6 +863,20 @@ async function renderRosterTab(stages) {
     });
   });
 
+  el.querySelectorAll('[data-del-emp]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Удалить сотрудника «${btn.dataset.name}»?\n\nОн пропадёт из списков для выбора, но вся его выработка в отчётах и журнале останется. В админке он будет зачёркнут, его можно восстановить.`)) return;
+      await fetch(`/api/admin/employees/${btn.dataset.delEmp}`, { method: 'DELETE', headers: authHeaders() });
+      renderRosterTab(stages);
+    });
+  });
+  el.querySelectorAll('[data-restore-emp]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/admin/employees/${btn.dataset.restoreEmp}/restore`, { method: 'POST', headers: authHeaders() });
+      renderRosterTab(stages);
+    });
+  });
+
   el.querySelectorAll('[data-force-close]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm('Закрыть эту смену силой? Старший больше не сможет вносить данные по ней.')) return;
@@ -881,10 +904,13 @@ async function renderNomTab() {
     <div id="nomList">
       ${items.map(n => `
         <div class="card">
-          <div class="row1">${n.name}${n.article ? ` (${n.article})` : ''} ${n.active ? '' : '(скрыто)'}</div>
-          <div class="row2">${n.unit}</div>
+          <div class="row1 ${n.deleted ? 'is-deleted' : ''}">${esc(n.name)}${n.article ? ` (${esc(n.article)})` : ''} ${!n.deleted && !n.active ? '(скрыто)' : ''}</div>
+          <div class="row2">${esc(n.unit)}${n.deleted ? ' · удалено' : ''}</div>
           <div class="actions">
-            <button data-toggle-nom="${n.id}" data-active="${n.active}">${n.active ? 'Скрыть' : 'Показать'}</button>
+            ${n.deleted
+              ? `<button data-restore-nom="${n.id}">Восстановить</button>`
+              : `<button data-toggle-nom="${n.id}" data-active="${n.active}">${n.active ? 'Скрыть' : 'Показать'}</button>
+                 <button class="danger" data-del-nom="${n.id}" data-name="${esc(n.name)}">Удалить</button>`}
           </div>
         </div>
       `).join('')}
@@ -900,6 +926,20 @@ async function renderNomTab() {
       body: JSON.stringify({ name: fd.get('name'), article: fd.get('article') || null, unit: fd.get('unit') || 'шт' }),
     });
     renderNomTab();
+  });
+
+  el.querySelectorAll('[data-del-nom]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Удалить позицию «${btn.dataset.name}»?\n\nИз форм она пропадёт, история останется. В списке будет зачёркнута, можно восстановить.`)) return;
+      await fetch(`/api/admin/nomenclature/${btn.dataset.delNom}`, { method: 'DELETE', headers: authHeaders() });
+      renderNomTab();
+    });
+  });
+  el.querySelectorAll('[data-restore-nom]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/admin/nomenclature/${btn.dataset.restoreNom}/restore`, { method: 'POST', headers: authHeaders() });
+      renderNomTab();
+    });
   });
 
   el.querySelectorAll('[data-toggle-nom]').forEach(btn => {
@@ -956,7 +996,7 @@ async function renderMixingTab(stages) {
               <tr><td class="name">${esc((r.article ? r.article + ' - ' : '') + r.name)}</td>${r.values.map(v => `<td>${v || ''}</td>`).join('')}<td><b>${r.sum}</b></td></tr>
             `).join('')}
             <tr class="total"><td class="name">Итого сырья, кг</td>${g.totals.map(t => `<td>${t}</td>`).join('')}<td>${g.totals_sum}</td></tr>
-            <tr class="total"><td class="name">Выход, кг</td>${g.batches.map(b => `<td>${b.output_quantity == null ? '—' : b.output_quantity}</td>`).join('')}<td>${g.output_sum}</td></tr>
+            <tr class="total"><td class="name">Итого вес замеса, кг (✎ — исправлено вручную)</td>${g.batches.map(b => `<td>${b.output_quantity == null ? '—' : b.output_quantity}${b.output_quantity != null && b.calc_quantity != null && b.output_quantity !== b.calc_quantity ? ` <span title="Исправлено вручную, авто: ${b.calc_quantity}" style="color:#b3372c">✎</span>` : ''}</td>`).join('')}<td>${g.output_sum}</td></tr>
           </tbody>
         </table>
       </div>
@@ -1042,18 +1082,76 @@ async function renderCatalogsTab() {
     </div>`;
 
   el.innerHTML = `
-    <div class="card"><div class="row2">Списки сырья для замесов зафиксированы и через админку не меняются — только просмотр. Нужна правка — скажи разработчику.</div></div>
+    <div class="card"><div class="row2">Базовый список сырья зафиксирован. Новое ТМЦ можно добавить кнопкой ниже — только с подтверждением. Удалённые позиции остаются в истории и показываются зачёркнутыми.</div></div>
+    <button class="mini-btn" id="showAddMat" style="width:100%; padding:12px; margin-bottom:12px; font-size:13px;">➕ Добавить новое ТМЦ</button>
+    <form class="inline" id="matForm" style="display:none;">
+      <label>Куда добавить</label>
+      <select name="category">
+        <option value="clay_mixing">Глина (замес)</option>
+        <option value="glaze_mixing">Глазурь (замес)</option>
+      </select>
+      <label>Название</label>
+      <input name="name" required maxlength="80" placeholder="Например: Бентонит" autocomplete="off">
+      <label>Артикул (необязательно)</label>
+      <input name="article" placeholder="Например: 12" autocomplete="off">
+      <label>Единица измерения</label>
+      <input name="unit" value="кг">
+      <button type="submit">Проверить и добавить</button>
+    </form>
     ${['clay_mixing', 'glaze_mixing'].map(cat => `
       <div class="card">
         <div class="row1">${LABELS[cat]}</div>
-        ${materials.filter(m => m.category === cat).map(m => `
-          <div class="item-line"><span>${esc((m.article ? m.article + ' - ' : '') + m.name)}</span><span>${esc(m.unit)}</span></div>
+        ${materials.filter(m => m.category === cat && !(m.deleted === 0 && m.active === 0)).map(m => `
+          <div class="item-line">
+            <span class="${m.deleted ? 'is-deleted' : ''}">${esc((m.article ? m.article + ' - ' : '') + m.name)}${m.is_custom ? ' <span class="op-code">· добавлено вручную</span>' : ''}</span>
+            <span style="display:flex; gap:6px; align-items:center;">
+              ${esc(m.unit)}
+              ${m.deleted
+                ? `<button class="mini-btn" data-restore-mat="${m.id}">Восстановить</button>`
+                : `<button class="mini-btn danger" data-del-mat="${m.id}" data-name="${esc(m.name)}">Удалить</button>`}
+            </span>
+          </div>
         `).join('')}
       </div>`).join('')}
     ${placeholder('Комплекты готовой продукции', catalogs.kits, k => `<div class="item-line"><span>${esc(k.code || '')} ${esc(k.name)}</span><span>${k.items.length} поз.</span></div>`)}
     ${placeholder('Все ТМЦ', catalogs.tmc, t => `<div class="item-line"><span>${esc(t.code || '')} ${esc(t.name)}</span><span>${esc(t.unit)}</span></div>`)}
     ${placeholder('Полуфабрикаты (п/ф)', catalogs.semi_products, t => `<div class="item-line"><span>${esc(t.code || '')} ${esc(t.name)}</span><span>${esc(t.unit)}</span></div>`)}
   `;
+
+  const form = el.querySelector('#matForm');
+  el.querySelector('#showAddMat').addEventListener('click', () => {
+    form.style.display = form.style.display === 'none' ? 'block' : 'none';
+  });
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const catTitle = fd.get('category') === 'clay_mixing' ? 'Глина (замес)' : 'Глазурь (замес)';
+    const name = String(fd.get('name')).trim();
+    const article = String(fd.get('article') || '').trim();
+    const unit = String(fd.get('unit') || 'кг').trim() || 'кг';
+    if (!confirm(`Добавить новое ТМЦ?\n\nКуда: ${catTitle}\nНазвание: ${name}\nАртикул: ${article || '—'}\nЕд.: ${unit}\n\nОно сразу появится в списке у всех рабочих.`)) return;
+    const res = await fetch('/api/admin/materials', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ category: fd.get('category'), name, article, unit, confirmed: true }),
+    });
+    const data = await res.json();
+    if (data.ok) { renderCatalogsTab(); }
+    else if (data.error === 'duplicate') alert('Такое ТМЦ уже есть в этом списке.');
+    else alert('Не удалось добавить: ' + (data.error || 'ошибка'));
+  });
+  el.querySelectorAll('[data-del-mat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm(`Удалить ТМЦ «${btn.dataset.name}»?\n\nИз форм замеса оно пропадёт, прошлые замесы не изменятся. В списке будет зачёркнуто, можно восстановить.`)) return;
+      await fetch(`/api/admin/materials/${btn.dataset.delMat}`, { method: 'DELETE', headers: authHeaders() });
+      renderCatalogsTab();
+    });
+  });
+  el.querySelectorAll('[data-restore-mat]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await fetch(`/api/admin/materials/${btn.dataset.restoreMat}/restore`, { method: 'POST', headers: authHeaders() });
+      renderCatalogsTab();
+    });
+  });
 }
 
 // --- Экспорт ---

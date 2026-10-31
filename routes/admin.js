@@ -308,8 +308,14 @@ router.put('/employees/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Удаление как в iiko: сотрудник остаётся в базе (вся его выработка цела), в списках показывается зачёркнутым
 router.delete('/employees/:id', (req, res) => {
-  db.prepare('UPDATE employees SET active = 0 WHERE id = ?').run(req.params.id);
+  db.prepare('UPDATE employees SET deleted = 1, active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/employees/:id/restore', (req, res) => {
+  db.prepare('UPDATE employees SET deleted = 0, active = 1 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -353,17 +359,50 @@ router.put('/nomenclature/:id', (req, res) => {
 });
 
 router.delete('/nomenclature/:id', (req, res) => {
-  // Мягкое удаление — просто деактивируем, чтобы не терять историю по старым записям
-  db.prepare('UPDATE nomenclature SET active = 0 WHERE id = ?').run(req.params.id);
+  // Как в iiko: не стираем, а помечаем удалённой — история по старым записям остаётся
+  db.prepare('UPDATE nomenclature SET deleted = 1, active = 0 WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
-// --- Сырьё (ТМЦ) для замесов: список СТАТИЧНЫЙ (src/catalog.js), через админку только просмотр ---
-router.get('/materials', (req, res) => {
-  res.json(db.prepare('SELECT * FROM materials WHERE active = 1 ORDER BY category, sort_order, id').all());
+router.post('/nomenclature/:id/restore', (req, res) => {
+  db.prepare('UPDATE nomenclature SET deleted = 0, active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
-router.post('/materials', (req, res) => res.status(403).json({ error: 'static_list' }));
-router.put('/materials/:id', (req, res) => res.status(403).json({ error: 'static_list' }));
+// --- Сырьё (ТМЦ) для замесов ---
+// Базовый список зафиксирован в src/catalog.js. Админ может ДОБАВЛЯТЬ новые позиции (только с явным подтверждением)
+// и удалять их "как в iiko" (зачёркнутые, история не стирается). Править имена/артикулы существующих нельзя.
+router.get('/materials', (req, res) => {
+  res.json(db.prepare('SELECT * FROM materials ORDER BY category, deleted, sort_order, id').all());
+});
+
+router.post('/materials', (req, res) => {
+  const { name, article, category, unit, confirmed } = req.body;
+  if (confirmed !== true) return res.status(400).json({ error: 'not_confirmed' });
+  const cleanName = String(name || '').trim();
+  const cleanArticle = String(article || '').trim() || null;
+  if (!cleanName || !['clay_mixing', 'glaze_mixing'].includes(category)) return res.status(400).json({ error: 'bad_request' });
+  if (cleanName.length > 80) return res.status(400).json({ error: 'name_too_long' });
+
+  // сравнение в JS: lower() в SQLite не понимает кириллицу
+  const dup = db.prepare('SELECT name, article FROM materials WHERE category = ? AND deleted = 0').all(category)
+    .some(m => m.name.trim().toLowerCase() === cleanName.toLowerCase() && (m.article || '') === (cleanArticle || ''));
+  if (dup) return res.status(409).json({ error: 'duplicate' });
+
+  const maxOrder = db.prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM materials WHERE category = ?').get(category).m;
+  const info = db.prepare('INSERT INTO materials (name, article, category, unit, sort_order, is_custom) VALUES (?, ?, ?, ?, ?, 1)')
+    .run(cleanName, cleanArticle, category, String(unit || 'кг').trim() || 'кг', maxOrder + 1);
+  res.json({ ok: true, id: info.lastInsertRowid });
+});
+
+router.delete('/materials/:id', (req, res) => {
+  db.prepare('UPDATE materials SET deleted = 1, active = 0 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
+
+router.post('/materials/:id/restore', (req, res) => {
+  db.prepare('UPDATE materials SET deleted = 0, active = 1 WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
+});
 
 module.exports = router;

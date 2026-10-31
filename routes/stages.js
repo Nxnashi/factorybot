@@ -31,6 +31,7 @@ router.get('/me/:telegramId', (req, res) => {
     header: meta.header || null,
     fields: meta.fields || null,
     hint: meta.hint || null,
+    description: meta.description || null,
     grade_options: meta.gradeOptions || null,
     is_roster_stage: ROSTER_STAGES.includes(meta.code),
     drums: DRUMS[meta.code] || null,
@@ -125,7 +126,7 @@ router.post('/mixing-batch/add-materials', (req, res) => {
   `);
   const tx = db.transaction(() => {
     for (const it of valid) {
-      const mat = db.prepare('SELECT * FROM materials WHERE id = ? AND category = ? AND active = 1').get(it.material_id, batch.stage);
+      const mat = db.prepare('SELECT * FROM materials WHERE id = ? AND category = ? AND active = 1 AND deleted = 0').get(it.material_id, batch.stage);
       if (!mat) throw new Error('bad_material');
       const info = insert.run(batch.entry_date, batch.stage, batch.telegram_id, batch.employee_name, mat.id,
         Number(it.quantity), batch.drum_number, batch.id, it.comment || null, nowLocal());
@@ -148,7 +149,7 @@ router.post('/mixing-batch/add-materials', (req, res) => {
 // Завершить замес — указать фактический выход
 router.post('/mixing-batch/complete', (req, res) => {
   const { batch_id, telegram_id, output_quantity } = req.body;
-  if (!batch_id || !telegram_id || !(Number(output_quantity) > 0)) return res.status(400).json({ error: 'bad_request' });
+  if (!batch_id || !telegram_id) return res.status(400).json({ error: 'bad_request' });
 
   const batch = db.prepare('SELECT * FROM mixing_batches WHERE id = ?').get(batch_id);
   if (!batch) return res.status(404).json({ error: 'not_found' });
@@ -156,30 +157,34 @@ router.post('/mixing-batch/complete', (req, res) => {
   if (batch.status !== 'in_progress') return res.status(403).json({ error: 'batch_closed' });
   if (isDayClosed(batch.entry_date)) return res.status(403).json({ error: 'day_closed' });
 
-  const materialsCount = db.prepare('SELECT COUNT(*) AS c FROM material_entries WHERE batch_id = ?').get(batch_id).c;
-  if (materialsCount === 0) return res.status(400).json({ error: 'no_materials' });
+  const agg = db.prepare('SELECT COUNT(*) AS c, COALESCE(SUM(quantity), 0) AS total FROM material_entries WHERE batch_id = ?').get(batch_id);
+  if (agg.c === 0) return res.status(400).json({ error: 'no_materials' });
 
-  const out = Number(output_quantity);
+  // Итого вес замеса считается автоматически (сумма сырья); можно передать output_quantity, чтобы исправить вручную
+  const calc = agg.total;
+  const hasManual = output_quantity !== undefined && output_quantity !== null && output_quantity !== '';
+  const out = hasManual ? Number(output_quantity) : calc;
+  if (!(out > 0)) return res.status(400).json({ error: 'bad_request' });
   db.transaction(() => {
-    db.prepare("UPDATE mixing_batches SET output_quantity = ?, status = 'completed', completed_at = ? WHERE id = ?").run(out, nowLocal(), batch_id);
+    db.prepare("UPDATE mixing_batches SET output_quantity = ?, calc_quantity = ?, status = 'completed', completed_at = ? WHERE id = ?").run(out, calc, nowLocal(), batch_id);
     updateByRef('mixing_batches', batch_id, {
-      summary: `Замес №${batch.batch_no}, барабан ${batch.drum_number}: выход ${out} кг`,
+      summary: `Замес №${batch.batch_no}, барабан ${batch.drum_number}: вес ${out} кг` + (out !== calc ? ` (исправлено вручную, авто ${calc})` : ''),
       qty: out,
     });
   })();
-  res.json({ ok: true, code: batch.code });
+  res.json({ ok: true, code: batch.code, total: out, auto: calc });
 });
 
 // Активная номенклатура для формы
 router.get('/nomenclature', (req, res) => {
-  res.json(db.prepare('SELECT id, name, article, unit FROM nomenclature WHERE active = 1 ORDER BY sort_order, id').all());
+  res.json(db.prepare('SELECT id, name, article, unit FROM nomenclature WHERE active = 1 AND deleted = 0 ORDER BY sort_order, id').all());
 });
 
 // Статичный список сырья для замеса (clay_mixing / glaze_mixing)
 router.get('/materials', (req, res) => {
   const { stage } = req.query;
   if (!stage) return res.status(400).json({ error: 'bad_request' });
-  res.json(db.prepare('SELECT id, name, article, unit FROM materials WHERE category = ? AND active = 1 ORDER BY sort_order, id').all(stage));
+  res.json(db.prepare('SELECT id, name, article, unit FROM materials WHERE category = ? AND active = 1 AND deleted = 0 ORDER BY sort_order, id').all(stage));
 });
 
 // --- Ростер и смена старшего (для этапов из ROSTER_STAGES) ---
@@ -187,7 +192,7 @@ router.get('/materials', (req, res) => {
 router.get('/roster', (req, res) => {
   const { stage } = req.query;
   if (!stage) return res.status(400).json({ error: 'bad_request' });
-  res.json(db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 ORDER BY full_name').all(stage));
+  res.json(db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 AND deleted = 0 ORDER BY full_name').all(stage));
 });
 
 router.get('/shift-status', (req, res) => {

@@ -119,7 +119,10 @@ async function buildReportWorkbook(from, to) {
         }
         const totalRow = sheet.addRow(['', 'Итого сырья, кг', ...g.totals, g.totals_sum]);
         totalRow.font = { bold: true };
-        const outRow = sheet.addRow(['', 'Выход, кг', ...g.batches.map(b => (b.output_quantity == null ? STATUS_LABELS[b.status] || '' : b.output_quantity)), g.output_sum]);
+        const outRow = sheet.addRow(['', 'Итого вес замеса, кг', ...g.batches.map(b => (b.output_quantity == null ? STATUS_LABELS[b.status] || '' : b.output_quantity)), g.output_sum]);
+        if (g.batches.some(b => b.output_quantity != null && b.calc_quantity != null && b.output_quantity !== b.calc_quantity)) {
+          sheet.addRow(['', 'Исправлено вручную (авто)', ...g.batches.map(b => (b.output_quantity != null && b.calc_quantity != null && b.output_quantity !== b.calc_quantity ? `авто ${b.calc_quantity}` : '')), '']).font = { italic: true, color: { argb: 'FFB3372C' } };
+        }
         outRow.font = { bold: true };
         sheet.addRow([]);
       }

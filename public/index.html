@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Учёт производства</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/kbd.js" defer></script>
 <style>
   :root {
     --bg: var(--tg-theme-bg-color, #f4f2ee);
@@ -332,6 +333,20 @@
     font-size: 15px;
   }
   .roster-check-item input { width: 18px; height: 18px; }
+  header { position: relative; }
+  .info-btn {
+    position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; border-radius: 50%;
+    border: 1.5px solid var(--accent); background: var(--bg); color: var(--accent);
+    font-size: 16px; font-weight: 800; line-height: 1; padding: 0;
+  }
+  .info-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 100;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .info-modal { background: var(--surface); border-radius: 16px; padding: 20px; max-width: 420px; width: 100%; }
+  .info-modal h3 { margin: 0 0 10px; font-size: 17px; }
+  .info-modal p { margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: var(--text); }
+  .info-modal button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 15px; }
   .stepper { display: flex; align-items: center; gap: 6px; }
   .stepper button {
     width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line);
@@ -786,6 +801,7 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
     showToast('Сначала добавь сырьё в замес');
     return;
   }
+  const autoTotal = Math.round(alreadyAdded.reduce((a, m) => a + Number(m.quantity), 0) * 1000) / 1000;
   app.innerHTML = `
     <header>
       <div class="eyebrow">Учёт производства</div>
@@ -798,14 +814,22 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
         ${alreadyAdded.map(m => `<div class="item-line"><span>${esc(m.material_name)}</span><span>${m.quantity}</span></div>`).join('')}
       </div>
       <div class="photo-card">
-        <label style="display:block; margin-bottom:8px; color:var(--hint); font-size:13px;">Сколько фактически получилось на выходе? (кг)</label>
-        <input type="number" min="0" inputmode="numeric" id="outputQty" placeholder="Количество, кг" class="photo-caption-input">
+        <label style="display:block; margin-bottom:8px; color:var(--hint); font-size:13px;">Итого вес замеса, кг (считается автоматически, при необходимости можно исправить)</label>
+        <input type="number" min="0" step="any" inputmode="decimal" id="outputQty" value="${autoTotal}" class="photo-caption-input">
+        <div class="calc-line" id="outputNote"></div>
       </div>
     </main>
     <div class="submit-bar">
       <button class="submit-btn" id="completeBatchBtn">Завершить замес</button>
     </div>
   `;
+
+  const qtyInput = document.getElementById('outputQty');
+  const noteEl = document.getElementById('outputNote');
+  qtyInput.addEventListener('input', () => {
+    const v = Number(qtyInput.value || 0);
+    noteEl.textContent = v !== autoTotal ? `Исправлено вручную (авто: ${autoTotal} кг)` : '';
+  });
 
   document.getElementById('completeBatchBtn').addEventListener('click', async () => {
     const btn = document.getElementById('completeBatchBtn');
@@ -1066,6 +1090,30 @@ async function loadToday(telegramId) {
     });
   });
 }
+
+// Кнопка «!» в углу шапки каждого этапа: описание этапа
+function decorateHeader() {
+  if (!currentMe) return;
+  const header = app.querySelector('header');
+  if (!header || header.querySelector('.info-btn')) return;
+  const h1 = header.querySelector('h1');
+  const stage = h1 && currentMe.stages.find(s => s.title === h1.textContent.trim());
+  if (!stage || !stage.description) return;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'info-btn';
+  b.textContent = '!';
+  b.setAttribute('aria-label', 'Описание этапа');
+  b.addEventListener('click', () => {
+    const ov = document.createElement('div');
+    ov.className = 'info-overlay';
+    ov.innerHTML = `<div class="info-modal"><h3>${esc(stage.title)}</h3><p>${esc(stage.description)}</p><button type="button">Понятно</button></div>`;
+    ov.addEventListener('click', e => { if (e.target === ov || e.target.tagName === 'BUTTON') ov.remove(); });
+    document.body.appendChild(ov);
+  });
+  header.appendChild(b);
+}
+new MutationObserver(decorateHeader).observe(app, { childList: true, subtree: true });
 
 init();
 </script>
