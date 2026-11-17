@@ -308,6 +308,15 @@ router.put('/employees/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Ручная загрузка списка сотрудников завода (кнопка в «Ростере цехов»): идемпотентно, дублей не создаёт
+router.post('/employees/seed', (req, res) => {
+  try {
+    res.json({ ok: true, ...require('../src/seedEmployees').seedEmployees() });
+  } catch (e) {
+    res.status(500).json({ error: 'seed_failed', message: e.message });
+  }
+});
+
 // Удаление как в iiko: сотрудник остаётся в базе (вся его выработка цела), в списках показывается зачёркнутым
 router.delete('/employees/:id', (req, res) => {
   db.prepare('UPDATE employees SET deleted = 1, active = 0 WHERE id = ?').run(req.params.id);

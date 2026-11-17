@@ -278,22 +278,6 @@ addColumn('employees', 'mark', 'TEXT');      // метка/бригада (бу�
 
 db.exec('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)');
 
-// Разовая загрузка списков сотрудников по цехам (src/data/employees.json).
-// Выполняется один раз; уже существующих (по ФИО+цех) не дублирует; удалённых/скрытых не возвращает.
-if (!db.prepare("SELECT 1 FROM app_meta WHERE key = 'seed_employees_v2'").get()) {
-  const list = require('./data/employees.json');
-  const exists = db.prepare('SELECT id FROM employees WHERE full_name = ? AND stage = ?');
-  const ins = db.prepare('INSERT INTO employees (full_name, stage, tab_no, mark) VALUES (?, ?, ?, ?)');
-  const setTab = db.prepare('UPDATE employees SET tab_no = COALESCE(tab_no, ?), mark = COALESCE(mark, ?) WHERE id = ?');
-  db.transaction(() => {
-    for (const e of list) {
-      const found = exists.get(e.full_name, e.stage);
-      if (found) setTab.run(e.tab_no, e.mark, found.id);
-      else ins.run(e.full_name, e.stage, e.tab_no, e.mark);
-    }
-    db.prepare("INSERT INTO app_meta (key, value) VALUES ('seed_employees_v2', datetime('now'))").run();
-  })();
-}
 
 // Миграция: если база создана до появления поля article — добавляем колонку
 const nomCols = db.prepare("PRAGMA table_info(nomenclature)").all().map(c => c.name);

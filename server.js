@@ -7,6 +7,8 @@ const stagesRouter = require('./routes/stages');
 const adminRouter = require('./routes/admin');
 const exportRouter = require('./routes/export');
 
+require('./src/seedEmployees').runOnce();
+
 const app = express();
 app.use(cors());
 app.use(express.json());

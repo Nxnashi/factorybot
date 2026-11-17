@@ -793,6 +793,7 @@ async function renderRosterTab(stages) {
   const stageTitle = code => stages.find(s => s.code === code)?.title || code;
 
   el.innerHTML = `
+    <button class="mini-btn" id="seedEmpBtn" style="width:100%; padding:12px; margin-bottom:12px; font-size:13px;">📥 Загрузить сотрудников завода по цехам</button>
     <form class="inline" id="empForm">
       <label>Имя сотрудника</label>
       <input name="full_name" required placeholder="Например: Вовчик">
@@ -839,6 +840,14 @@ async function renderRosterTab(stages) {
       }).join('')}
     </div>
   `;
+
+  el.querySelector('#seedEmpBtn').addEventListener('click', async () => {
+    if (!confirm('Загрузить список сотрудников завода по цехам?\n\nУже существующие не дублируются, удалённые не возвращаются.')) return;
+    const res = await fetch('/api/admin/employees/seed', { method: 'POST', headers: authHeaders() });
+    const data = await res.json();
+    if (data.ok) { alert(`Готово. Добавлено: ${data.added}, уже были: ${data.existing}`); renderRosterTab(stages); }
+    else alert('Не удалось: ' + (data.message || data.error));
+  });
 
   el.querySelector('#empForm').addEventListener('submit', async (e) => {
     e.preventDefault();
