@@ -458,12 +458,15 @@ async function init() {
   }
 }
 
+let mixEmp = null; // сотрудник, за которого вносится замес
+
 function openStage(me, stage) {
   currentStage = stage;
-  if (stage.form_type === 'materials') {
-    renderDrumPicker(me, stage);
-  } else if (stage.is_roster_stage) {
+  mixEmp = null;
+  if (stage.is_roster_stage) {
     renderShiftGate(me, stage);
+  } else if (stage.form_type === 'materials') {
+    renderDrumPicker(me, stage);
   } else {
     renderForm(me, stage, currentNomenclature, null, null);
     loadToday(me.telegram_id);
@@ -607,7 +610,12 @@ function renderEmployeePicker(me, stage, shift, employees) {
 
   app.querySelectorAll('[data-emp-id]').forEach(btn => {
     btn.addEventListener('click', () => {
-      renderForm(me, stage, currentNomenclature, Number(btn.dataset.empId), btn.dataset.empName, shift);
+      if (stage.form_type === 'materials') {
+        mixEmp = { id: Number(btn.dataset.empId), name: btn.dataset.empName, shift };
+        renderDrumPicker(me, stage);
+      } else {
+        renderForm(me, stage, currentNomenclature, Number(btn.dataset.empId), btn.dataset.empName, shift);
+      }
     });
   });
 
@@ -644,10 +652,13 @@ function renderEmployeePicker(me, stage, shift, employees) {
 
 // Экран замесов: барабаны, замесы за сегодня, кнопка "новый замес" (замесов в день может быть много)
 async function renderDrumPicker(me, stage) {
+  if (stage.is_roster_stage && !mixEmp) { renderShiftGate(me, stage); return; }
   const today = todayLocal();
   app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
   const batches = await (await fetch(`${API}/api/mixing-batch/today?stage=${stage.code}&entry_date=${today}`)).json();
-  const switchLink = me.stages.length > 1 ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>` : '';
+  const switchLink = stage.is_roster_stage
+    ? `<button class="switch-stage-btn" id="switchStageBtn">← К списку сотрудников</button>`
+    : (me.stages.length > 1 ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>` : '');
   const fixedDrum = stage.drums.length === 1;
 
   const drumBlocks = stage.drums.map(d => {
@@ -669,7 +680,7 @@ async function renderDrumPicker(me, stage) {
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">Учёт производства</div>
+      <div class="eyebrow">${stage.is_roster_stage ? 'Замес за: ' + esc(mixEmp.name) : 'Учёт производства'}</div>
       <h1>${stage.title}</h1>
       <div class="who">${esc(me.full_name)} ${switchLink}</div>
     </header>
@@ -682,7 +693,7 @@ async function renderDrumPicker(me, stage) {
     btn.addEventListener('click', () => startBatch(me, stage, Number(btn.dataset.drum)));
   });
   const switchBtn = document.getElementById('switchStageBtn');
-  if (switchBtn) switchBtn.addEventListener('click', () => renderStagePicker(me));
+  if (switchBtn) switchBtn.addEventListener('click', () => (stage.is_roster_stage ? renderShiftGate(me, stage) : renderStagePicker(me)));
 }
 
 async function startBatch(me, stage, drumNumber) {
@@ -690,10 +701,11 @@ async function startBatch(me, stage, drumNumber) {
     const res = await fetch(`${API}/api/mixing-batch/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: todayLocal(), stage: stage.code, drum_number: drumNumber }),
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: todayLocal(), stage: stage.code, drum_number: drumNumber, employee_id: mixEmp ? mixEmp.id : undefined }),
     });
     const data = await res.json();
     if (data.error === 'day_closed') { showToast('Этот день уже закрыт. Обратись к администратору.'); return; }
+    if (data.error === 'shift_not_open') { showToast('Смена закрыта. Открой смену заново.'); renderShiftGate(me, stage); return; }
     if (data.error) { showToast('Ошибка: ' + data.error); return; }
     renderMaterialsForm(me, stage, data.batch, data.materials);
   } catch (e) {
@@ -732,7 +744,7 @@ async function renderMaterialsForm(me, stage, batch, alreadyAdded) {
 
   app.innerHTML = `
     <header>
-      <div class="eyebrow">Замес №${batch.batch_no} · барабан ${batch.drum_number}</div>
+      <div class="eyebrow">Замес №${batch.batch_no} · барабан ${batch.drum_number}${batch.employee_name && stage.is_roster_stage ? ' · ' + esc(batch.employee_name) : ''}</div>
       <h1>${stage.title}</h1>
       <div class="who">${esc(me.full_name)} <button class="switch-stage-btn" id="backToDrumsBtn">← К замесам</button></div>
     </header>

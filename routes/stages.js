@@ -57,7 +57,7 @@ router.get('/mixing-batch/today', (req, res) => {
 
 // Начать замес или вернуться к уже открытому (этап+барабан+сотрудник) — прогресс не теряется при сворачивании
 router.post('/mixing-batch/start', (req, res) => {
-  const { telegram_id, entry_date, stage, drum_number } = req.body;
+  const { telegram_id, entry_date, stage, drum_number, employee_id } = req.body;
   if (!telegram_id || !entry_date || !stage || !drum_number) return res.status(400).json({ error: 'bad_request' });
   if (!DRUMS[stage]) return res.status(400).json({ error: 'bad_stage' });
   if (!DRUMS[stage].includes(Number(drum_number))) return res.status(400).json({ error: 'bad_drum' });
@@ -74,17 +74,33 @@ router.post('/mixing-batch/start', (req, res) => {
   `).get(telegram_id, stage, drum_number);
 
   if (!batch) {
+    // Замес делает сотрудник из ростера (старший вносит за него), как на остальных этапах
+    let workerName = user.full_name;
+    let workerId = null;
+    let enteredBy = null;
+    if (ROSTER_STAGES.includes(stage)) {
+      if (!employee_id) return res.status(400).json({ error: 'employee_required' });
+      const shift = db.prepare(`
+        SELECT * FROM foreman_shifts WHERE telegram_id = ? AND stage = ? AND entry_date = ? AND status = 'open'
+        ORDER BY id DESC LIMIT 1
+      `).get(telegram_id, stage, entry_date);
+      if (!shift) return res.status(403).json({ error: 'shift_not_open' });
+      if (!shift.employee_ids.split(',').map(Number).includes(Number(employee_id))) return res.status(403).json({ error: 'employee_not_in_shift' });
+      const emp = db.prepare('SELECT * FROM employees WHERE id = ?').get(employee_id);
+      if (!emp) return res.status(404).json({ error: 'employee_not_found' });
+      workerName = emp.full_name; workerId = emp.id; enteredBy = user.full_name;
+    }
     const tx = db.transaction(() => {
       const batchNo = db.prepare(`
         SELECT COUNT(*) AS c FROM mixing_batches WHERE entry_date = ? AND stage = ? AND drum_number = ? AND status != 'cancelled'
       `).get(entry_date, stage, drum_number).c + 1;
       const info = db.prepare(`
-        INSERT INTO mixing_batches (entry_date, stage, telegram_id, employee_name, drum_number, batch_no, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(entry_date, stage, user.telegram_id, user.full_name, drum_number, batchNo, nowLocal());
+        INSERT INTO mixing_batches (entry_date, stage, telegram_id, employee_name, employee_id, entered_by, drum_number, batch_no, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(entry_date, stage, user.telegram_id, workerName, workerId, enteredBy, drum_number, batchNo, nowLocal());
       const id = info.lastInsertRowid;
       const code = post({
-        stage, entryDate: entry_date, telegramId: user.telegram_id, actor: user.full_name,
+        stage, entryDate: entry_date, telegramId: user.telegram_id, actor: workerName, enteredBy,
         refTable: 'mixing_batches', refId: id, kind: 'batch',
         summary: `Замес №${batchNo}, барабан ${drum_number} (в процессе)`,
       });
@@ -131,7 +147,7 @@ router.post('/mixing-batch/add-materials', (req, res) => {
       const info = insert.run(batch.entry_date, batch.stage, batch.telegram_id, batch.employee_name, mat.id,
         Number(it.quantity), batch.drum_number, batch.id, it.comment || null, nowLocal());
       const code = post({
-        stage: batch.stage, entryDate: batch.entry_date, telegramId: batch.telegram_id, actor: batch.employee_name,
+        stage: batch.stage, entryDate: batch.entry_date, telegramId: batch.telegram_id, actor: batch.employee_name, enteredBy: batch.entered_by,
         refTable: 'material_entries', refId: info.lastInsertRowid, kind: 'material', parentCode: batch.code,
         summary: `Списание: ${mat.article ? mat.article + ' - ' : ''}${mat.name} → замес №${batch.batch_no}, барабан ${batch.drum_number}`,
         qty: Number(it.quantity),

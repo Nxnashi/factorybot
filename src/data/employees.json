@@ -1,0 +1,338 @@
+[
+ {
+  "full_name": "Федосеев Андрей Васильевич",
+  "stage": "molding",
+  "tab_no": "1004",
+  "mark": null
+ },
+ {
+  "full_name": "Комилов Жахонгир Негматжонович",
+  "stage": "molding",
+  "tab_no": "1059",
+  "mark": null
+ },
+ {
+  "full_name": "Расулов Абдулатиф Абдумаликович",
+  "stage": "molding",
+  "tab_no": "1266",
+  "mark": null
+ },
+ {
+  "full_name": "Жураев Руслан Дилшодбекович",
+  "stage": "molding",
+  "tab_no": "1243",
+  "mark": null
+ },
+ {
+  "full_name": "Шарипов Мажид Абдурауфович",
+  "stage": "molding",
+  "tab_no": "1005",
+  "mark": null
+ },
+ {
+  "full_name": "Туйчиев Муслимбек Рустамжон угли",
+  "stage": "molding",
+  "tab_no": "1166",
+  "mark": null
+ },
+ {
+  "full_name": "Аскаров Дониёр Дилшодбек угли",
+  "stage": "molding",
+  "tab_no": "1275",
+  "mark": null
+ },
+ {
+  "full_name": "Хакимов Жавохир Ойбек угли",
+  "stage": "molding",
+  "tab_no": "1158",
+  "mark": null
+ },
+ {
+  "full_name": "Зоитов Абдусаттор Гофурович",
+  "stage": "molding",
+  "tab_no": "1006",
+  "mark": null
+ },
+ {
+  "full_name": "Охунов Миродил Собиржонович",
+  "stage": "molding",
+  "tab_no": "1009",
+  "mark": null
+ },
+ {
+  "full_name": "Рузиматов Бунёд Рузиевич",
+  "stage": "molding",
+  "tab_no": "1293",
+  "mark": null
+ },
+ {
+  "full_name": "Худойбердиев Сирожиддин Абдукаххорович",
+  "stage": "molding",
+  "tab_no": "1319",
+  "mark": null
+ },
+ {
+  "full_name": "Юлдашев Абдулазиз Абдурахмонович",
+  "stage": "fettling",
+  "tab_no": "1034",
+  "mark": "F"
+ },
+ {
+  "full_name": "Мавлонкулов Мухаммаджон Мурод угли",
+  "stage": "fettling",
+  "tab_no": "1047",
+  "mark": "М"
+ },
+ {
+  "full_name": "Якубов Бахтиёр Азизжонович",
+  "stage": "fettling",
+  "tab_no": "1048",
+  "mark": "Y"
+ },
+ {
+  "full_name": "Каримов Гайрат Абдурашидович",
+  "stage": "fettling",
+  "tab_no": "1322",
+  "mark": "Х"
+ },
+ {
+  "full_name": "Турсунов Эльёр Эркинжонович",
+  "stage": "fettling",
+  "tab_no": "1316",
+  "mark": "L"
+ },
+ {
+  "full_name": "Гофуров Жавохир Шарипович",
+  "stage": "fettling",
+  "tab_no": "1348",
+  "mark": "RR"
+ },
+ {
+  "full_name": "Умаров Отабек Абдуманноб угли",
+  "stage": "fettling",
+  "tab_no": "1349",
+  "mark": "SS"
+ },
+ {
+  "full_name": "Корабоев Бекзод Уткурович",
+  "stage": "fettling",
+  "tab_no": "1334",
+  "mark": "DD"
+ },
+ {
+  "full_name": "Исоков Шерзод Шухратович",
+  "stage": "glazing",
+  "tab_no": "1017",
+  "mark": "I-команда"
+ },
+ {
+  "full_name": "Ворисхужаев Фарход Абдурахмонович",
+  "stage": "glazing",
+  "tab_no": "1016",
+  "mark": "II-команда"
+ },
+ {
+  "full_name": "Махкамов Уткир Учкунович",
+  "stage": "glazing",
+  "tab_no": "1329",
+  "mark": "II-команда"
+ },
+ {
+  "full_name": "Кодиркулов Абдували Абдувохидович",
+  "stage": "glazing",
+  "tab_no": "1351",
+  "mark": "II-команда"
+ },
+ {
+  "full_name": "Султонов Шерзод Давронович",
+  "stage": "glazing",
+  "tab_no": "1135",
+  "mark": "III-команда"
+ },
+ {
+  "full_name": "Ахмедов Жасур Кулахмад угли",
+  "stage": "glazing",
+  "tab_no": "1249",
+  "mark": "III-команда"
+ },
+ {
+  "full_name": "Вохобов Ёдгор Дилшод угли",
+  "stage": "glazing",
+  "tab_no": "1248",
+  "mark": "III-команда"
+ },
+ {
+  "full_name": "Эргашев Озод Тохирович",
+  "stage": "glazing",
+  "tab_no": "1308",
+  "mark": "IV-команда"
+ },
+ {
+  "full_name": "Алиев Азизжон Вали угли",
+  "stage": "glazing",
+  "tab_no": "1339",
+  "mark": "IV-команда"
+ },
+ {
+  "full_name": "Джурабаев Жавлон Алижонович",
+  "stage": "kiln",
+  "tab_no": "1025",
+  "mark": null
+ },
+ {
+  "full_name": "Абдукодиров Давлатбек Мухаммаджон угли",
+  "stage": "kiln",
+  "tab_no": "1280",
+  "mark": null
+ },
+ {
+  "full_name": "Жалолов Азизилло Ахмадуллаевич",
+  "stage": "kiln",
+  "tab_no": "1225",
+  "mark": null
+ },
+ {
+  "full_name": "Абдурахимов Жамшид Баходирович",
+  "stage": "kiln",
+  "tab_no": "1357",
+  "mark": null
+ },
+ {
+  "full_name": "Рахматжонов Тохир Гофурович",
+  "stage": "kiln",
+  "tab_no": "1358",
+  "mark": null
+ },
+ {
+  "full_name": "Алмагробий Мухаммад Абдулатифкамал",
+  "stage": "sorting",
+  "tab_no": null,
+  "mark": null
+ },
+ {
+  "full_name": "Мамталиев Одил Комилович",
+  "stage": "sorting",
+  "tab_no": "1276",
+  "mark": null
+ },
+ {
+  "full_name": "Имомназаров Умиджон Кобилжон угли",
+  "stage": "sorting",
+  "tab_no": "1328",
+  "mark": null
+ },
+ {
+  "full_name": "Ахмадбоев Абдулахад Аюбхон угли",
+  "stage": "sorting",
+  "tab_no": "1278",
+  "mark": null
+ },
+ {
+  "full_name": "Лукянчук Дмитрий Константинович",
+  "stage": "sorting",
+  "tab_no": "1288",
+  "mark": null
+ },
+ {
+  "full_name": "Азимов Рустам Рахимжонович",
+  "stage": "sorting",
+  "tab_no": null,
+  "mark": "Ремонт"
+ },
+ {
+  "full_name": "Мирахмедов Мирюсув Абдурашидович",
+  "stage": "sorting",
+  "tab_no": "1252",
+  "mark": "Ремонт"
+ },
+ {
+  "full_name": "Агзамов Бахтиёр Олимбекович",
+  "stage": "sorting",
+  "tab_no": "1347",
+  "mark": "Ремонт"
+ },
+ {
+  "full_name": "Петросов Артём Глебович",
+  "stage": "finished",
+  "tab_no": "1260",
+  "mark": null
+ },
+ {
+  "full_name": "Суслин Александр Александрович",
+  "stage": "finished",
+  "tab_no": "1271",
+  "mark": null
+ },
+ {
+  "full_name": "Куртасанов Ильдар Валерьевич",
+  "stage": "finished",
+  "tab_no": "1314",
+  "mark": null
+ },
+ {
+  "full_name": "Одилжонов Бобирмирзо Кузибой угли",
+  "stage": "finished",
+  "tab_no": "1295",
+  "mark": null
+ },
+ {
+  "full_name": "Кушматов Собиржон Фахриддинович",
+  "stage": "finished",
+  "tab_no": "1310",
+  "mark": null
+ },
+ {
+  "full_name": "Давронов Фахриддин Атхам угли",
+  "stage": "finished",
+  "tab_no": "1282",
+  "mark": null
+ },
+ {
+  "full_name": "Махмудов Ровшан Тухтасин угли",
+  "stage": "finished",
+  "tab_no": "1318",
+  "mark": null
+ },
+ {
+  "full_name": "Худойбердиев Абдурахмон Обиджон угли",
+  "stage": "finished",
+  "tab_no": "1317",
+  "mark": null
+ },
+ {
+  "full_name": "Холматов Эльёр Ортикбоевич",
+  "stage": "clay_mixing",
+  "tab_no": "1218",
+  "mark": null
+ },
+ {
+  "full_name": "Рахимбердиев Мухаммаддиёр Турдимухаммад угли",
+  "stage": "clay_mixing",
+  "tab_no": "1223",
+  "mark": null
+ },
+ {
+  "full_name": "Юлчибаев Алижон Одилович",
+  "stage": "clay_mixing",
+  "tab_no": "1301",
+  "mark": null
+ },
+ {
+  "full_name": "Абдуллаев Одилжон Солижонович",
+  "stage": "clay_mixing",
+  "tab_no": "1281",
+  "mark": null
+ },
+ {
+  "full_name": "Арзиматов Миркомол Улугбек угли",
+  "stage": "clay_mixing",
+  "tab_no": "1336",
+  "mark": null
+ },
+ {
+  "full_name": "Рахимов Улугбек Абдумаликович",
+  "stage": "glaze_mixing",
+  "tab_no": "1162",
+  "mark": "глазурь тайёрловчи"
+ }
+]

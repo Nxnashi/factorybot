@@ -784,7 +784,7 @@ async function renderUsersTab(stages) {
 // --- Ростер сотрудников по цехам (не имеют доступа в бот — вносит за них старший) ---
 async function renderRosterTab(stages) {
   const el = document.getElementById('tab-roster');
-  const rosterStageCodes = stages.filter(s => s.formType === 'doc').map(s => s.code);
+  const rosterStageCodes = stages.filter(s => s.formType === 'doc' || s.formType === 'materials').map(s => s.code);
 
   const employees = await (await fetch('/api/admin/employees', { headers: authHeaders() })).json();
   const today = todayLocal();
@@ -825,7 +825,7 @@ async function renderRosterTab(stages) {
             <div class="row1">${stageTitle(code)}</div>
             ${stageEmployees.map(e => `
               <div class="item-line">
-                <span class="${e.deleted ? 'is-deleted' : ''}">${esc(e.full_name)} ${!e.deleted && !e.active ? '(скрыт)' : ''}</span>
+                <span class="${e.deleted ? 'is-deleted' : ''}">${esc(e.full_name)} ${!e.deleted && !e.active ? '(скрыт)' : ''}</span>${e.tab_no || e.mark ? ` <span class="op-code">${e.tab_no ? '№' + esc(e.tab_no) : ''}${e.mark ? ' · ' + esc(e.mark) : ''}</span>` : ''}
                 <span style="display:flex; gap:6px;">
                   ${e.deleted
                     ? `<button class="mini-btn" data-restore-emp="${e.id}">Восстановить</button>`
