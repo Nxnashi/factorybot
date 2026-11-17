@@ -288,21 +288,38 @@ router.post('/mixing-batches/:id/cancel', (req, res) => {
 router.get('/employees', (req, res) => {
   const { stage } = req.query;
   const rows = stage
-    ? db.prepare('SELECT * FROM employees WHERE stage = ? ORDER BY full_name').all(stage)
-    : db.prepare('SELECT * FROM employees ORDER BY stage, full_name').all();
+    ? db.prepare('SELECT * FROM employees WHERE stage = ? ORDER BY CAST(tab_no AS INTEGER), full_name').all(stage)
+    : db.prepare('SELECT * FROM employees ORDER BY stage, CAST(tab_no AS INTEGER), full_name').all();
   res.json(rows);
 });
 
+// Артикул (табельный номер): обязателен у нового сотрудника, уникален среди неудалённых, админ может менять
+function articleTaken(tabNo, exceptId) {
+  return !!db.prepare('SELECT 1 FROM employees WHERE deleted = 0 AND tab_no = ? AND id != ?').get(tabNo, exceptId || 0);
+}
+
 router.post('/employees', (req, res) => {
-  const { full_name, stage } = req.body;
+  const full_name = String(req.body.full_name || '').trim();
+  const stage = req.body.stage;
+  const tab_no = String(req.body.tab_no || '').trim();
   if (!full_name || !stage) return res.status(400).json({ error: 'bad_request' });
+  if (!tab_no) return res.status(400).json({ error: 'article_required', message: 'Укажи артикул сотрудника' });
   if (!STAGES.find(s => s.code === stage)) return res.status(400).json({ error: 'unknown_stage' });
-  const info = db.prepare('INSERT INTO employees (full_name, stage) VALUES (?, ?)').run(full_name, stage);
+  if (articleTaken(tab_no)) return res.status(409).json({ error: 'duplicate_article', message: 'Такой артикул уже есть у другого сотрудника' });
+  const info = db.prepare('INSERT INTO employees (full_name, stage, tab_no, mark) VALUES (?, ?, ?, ?)')
+    .run(full_name, stage, tab_no, String(req.body.mark || '').trim() || null);
   res.json({ ok: true, id: info.lastInsertRowid });
 });
 
 router.put('/employees/:id', (req, res) => {
-  const { full_name, active } = req.body;
+  const { full_name, active, tab_no, mark } = req.body;
+  if (tab_no !== undefined) {
+    const t = String(tab_no).trim();
+    if (!t) return res.status(400).json({ error: 'article_required', message: 'Артикул не может быть пустым' });
+    if (articleTaken(t, Number(req.params.id))) return res.status(409).json({ error: 'duplicate_article', message: 'Такой артикул уже есть у другого сотрудника' });
+    db.prepare('UPDATE employees SET tab_no = ? WHERE id = ?').run(t, req.params.id);
+  }
+  if (mark !== undefined) db.prepare('UPDATE employees SET mark = ? WHERE id = ?').run(String(mark).trim() || null, req.params.id);
   db.prepare('UPDATE employees SET full_name = COALESCE(?, full_name), active = COALESCE(?, active) WHERE id = ?')
     .run(full_name ?? null, active === undefined ? null : (active ? 1 : 0), req.params.id);
   res.json({ ok: true });

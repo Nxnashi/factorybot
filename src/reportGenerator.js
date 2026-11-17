@@ -53,9 +53,10 @@ async function buildReportWorkbook(from, to) {
   const stageTitleByCode = Object.fromEntries(STAGES.map(s => [s.code, s.title]));
 
   const allRows = db.prepare(`
-    SELECT e.*, n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name
+    SELECT e.*, emp.tab_no AS emp_tab_no, n.name || CASE WHEN n.article IS NOT NULL THEN ' (' || n.article || ')' ELSE '' END AS nomenclature_name
     FROM entries e
     JOIN nomenclature n ON n.id = e.nomenclature_id
+    LEFT JOIN employees emp ON emp.id = e.employee_id
     WHERE e.entry_date BETWEEN ? AND ?
     ORDER BY e.entry_date, e.stage, e.created_at, e.id
   `).all(from, to);
@@ -67,6 +68,7 @@ async function buildReportWorkbook(from, to) {
     { header: 'Дата', key: 'entry_date', width: 12 },
     { header: 'Время', key: 'time', width: 8 },
     { header: 'Этап', key: 'stage_title', width: 20 },
+    { header: 'Артикул сотр.', key: 'emp_tab_no', width: 13 },
     { header: 'Сотрудник', key: 'employee_name', width: 22 },
     { header: 'Старший', key: 'entered_by', width: 20 },
     { header: 'Модель', key: 'nomenclature_name', width: 30 },
@@ -86,6 +88,7 @@ async function buildReportWorkbook(from, to) {
     .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || (orderIndex[a.stage] ?? 99) - (orderIndex[b.stage] ?? 99) || a.id - b.id)
     .forEach(r => summary.addRow({
       ...r,
+      emp_tab_no: r.emp_tab_no || '',
       time: time(r.created_at),
       stage_title: stageTitleByCode[r.stage] || r.stage,
       entered_by: r.entered_by || '',
@@ -133,6 +136,7 @@ async function buildReportWorkbook(from, to) {
       { header: 'Код операции', key: 'op_code', width: 20 },
       { header: 'Дата', key: 'entry_date', width: 12 },
       { header: 'Время', key: 'time', width: 8 },
+      { header: 'Артикул сотр.', key: 'emp_tab_no', width: 13 },
       { header: 'Сотрудник', key: 'employee_name', width: 22 },
       { header: 'Старший', key: 'entered_by', width: 20 },
       { header: 'Модель', key: 'nomenclature_name', width: 32 },

@@ -347,6 +347,9 @@
   .info-modal h3 { margin: 0 0 10px; font-size: 17px; }
   .info-modal p { margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: var(--text); }
   .info-modal button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 15px; }
+  .art-col { display: inline-block; min-width: 46px; font-family: monospace; font-weight: 700; color: var(--hint); }
+  .emp-btn { display: flex; align-items: center; gap: 10px; text-align: left; }
+  .roster-check-item { display: flex; align-items: center; gap: 10px; }
   .stepper { display: flex; align-items: center; gap: 6px; }
   .stepper button {
     width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line);
@@ -537,7 +540,9 @@ async function renderOpenShiftScreen(me, stage) {
       <div id="rosterList">
         ${roster.map(e => `
           <label class="roster-check-item">
-            <input type="checkbox" value="${e.id}"> ${e.full_name}
+            <input type="checkbox" value="${e.id}">
+            <span class="art-col">${esc(e.tab_no || '—')}</span>
+            <span>${esc(e.full_name)}</span>
           </label>
         `).join('')}
       </div>
@@ -599,7 +604,7 @@ function renderEmployeePicker(me, stage, shift, employees) {
     <main>
       <div class="picker-hint">Смена открыта. Выбери сотрудника, чтобы внести его выработку.</div>
       ${employees.map(e => `
-        <button class="stage-pick-btn" data-emp-id="${e.id}" data-emp-name="${e.full_name}">${e.full_name}</button>
+        <button class="stage-pick-btn emp-btn" data-emp-id="${e.id}" data-emp-name="${esc(e.full_name)}"><span class="art-col">${esc(e.tab_no || '—')}</span><span>${esc(e.full_name)}</span></button>
       `).join('')}
       <div class="today-log" id="todayLog"></div>
     </main>

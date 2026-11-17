@@ -208,7 +208,7 @@ router.get('/materials', (req, res) => {
 router.get('/roster', (req, res) => {
   const { stage } = req.query;
   if (!stage) return res.status(400).json({ error: 'bad_request' });
-  res.json(db.prepare('SELECT id, full_name FROM employees WHERE stage = ? AND active = 1 AND deleted = 0 ORDER BY full_name').all(stage));
+  res.json(db.prepare(`SELECT id, full_name, tab_no FROM employees WHERE stage = ? AND active = 1 AND deleted = 0 ORDER BY CASE WHEN tab_no IS NULL OR tab_no = '' THEN 1 ELSE 0 END, CAST(tab_no AS INTEGER), full_name`).all(stage));
 });
 
 router.get('/shift-status', (req, res) => {
@@ -222,7 +222,7 @@ router.get('/shift-status', (req, res) => {
 
   const employeeIds = shift.employee_ids.split(',').map(Number);
   const employees = employeeIds.length > 0
-    ? db.prepare(`SELECT id, full_name FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')})`).all(...employeeIds)
+    ? db.prepare(`SELECT id, full_name, tab_no FROM employees WHERE id IN (${employeeIds.map(() => '?').join(',')}) ORDER BY CAST(tab_no AS INTEGER), full_name`).all(...employeeIds)
     : [];
   res.json({ shift, employees });
 });
