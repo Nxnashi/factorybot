@@ -273,8 +273,8 @@
   .matrix tr.total td { font-weight: 700; background: #EFEAE0; }
   .matrix .meta td { font-size: 10px; color: var(--hint); }
   .art-col { font-family: monospace; font-weight: 700; min-width: 44px; display: inline-block; }
-  .emp-row { display: grid; grid-template-columns: 56px 1fr; gap: 4px 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-  .emp-row > span:nth-child(3) { grid-column: 2; justify-content: flex-start !important; }
+  .emp-row { display: grid; grid-template-columns: 56px 52px 1fr; gap: 4px 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .emp-row > span:nth-child(4) { grid-column: 2 / 4; justify-content: flex-start !important; }
   .emp-head { font-size: 10px; text-transform: uppercase; color: var(--hint); border-bottom: 1px solid var(--line); }
   .is-deleted { text-decoration: line-through; opacity: .55; }
   .mini-btn { font-size:11px; padding:4px 8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
@@ -801,6 +801,8 @@ async function renderRosterTab(stages) {
     <form class="inline" id="empForm">
       <label>Артикул (табельный №) — обязательно</label>
       <input name="tab_no" required inputmode="numeric" placeholder="Например: 1034" autocomplete="off">
+      <label>Метка — буква или команда латиницей (необязательно)</label>
+      <input name="mark" maxlength="12" placeholder="Например: F или II" autocomplete="off">
       <label>ФИО сотрудника</label>
       <input name="full_name" required placeholder="Например: Иванов Иван Иванович">
       <label>Этап (цех)</label>
@@ -830,15 +832,16 @@ async function renderRosterTab(stages) {
         return `
           <div class="card">
             <div class="row1">${stageTitle(code)}</div>
-            <div class="emp-row emp-head"><span>Артикул</span><span>Сотрудник</span><span></span></div>
+            <div class="emp-row emp-head"><span>Артикул</span><span>Метка</span><span>Сотрудник</span></div>
             ${[...stageEmployees].sort((x, y) => (x.deleted - y.deleted) || ((x.tab_no ? Number(x.tab_no) : 1e12) - (y.tab_no ? Number(y.tab_no) : 1e12)) || x.full_name.localeCompare(y.full_name)).map(e => `
               <div class="emp-row">
                 <span class="art-col ${e.deleted ? 'is-deleted' : ''}">${e.tab_no ? esc(e.tab_no) : '<span style="color:#b3372c">нет</span>'}</span>
-                <span class="${e.deleted ? 'is-deleted' : ''}">${esc(e.full_name)} ${!e.deleted && !e.active ? '(скрыт)' : ''}${e.mark ? ` <span class="op-code">· ${esc(e.mark)}</span>` : ''}</span>
+                <span class="art-col ${e.deleted ? 'is-deleted' : ''}">${e.mark ? esc(e.mark) : ''}</span>
+                <span class="${e.deleted ? 'is-deleted' : ''}">${esc(e.full_name)} ${!e.deleted && !e.active ? '(скрыт)' : ''}</span>
                 <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
                   ${e.deleted
                     ? `<button class="mini-btn" data-restore-emp="${e.id}">Восстановить</button>`
-                    : `<button class="mini-btn" data-edit-art="${e.id}" data-art="${esc(e.tab_no || '')}" data-name="${esc(e.full_name)}">Артикул</button>
+                    : `<button class="mini-btn" data-edit-art="${e.id}" data-art="${esc(e.tab_no || '')}" data-mark="${esc(e.mark || '')}" data-name="${esc(e.full_name)}">Артикул / метка</button>
                        <button class="mini-btn" data-toggle-emp="${e.id}" data-active="${e.active}">${e.active ? 'Скрыть' : 'Показать'}</button>
                        <button class="mini-btn danger" data-del-emp="${e.id}" data-name="${esc(e.full_name)}">Удалить</button>`}
                 </span>
@@ -864,7 +867,7 @@ async function renderRosterTab(stages) {
     const res = await fetch('/api/admin/employees', {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ full_name: fd.get('full_name'), stage: fd.get('stage'), tab_no: fd.get('tab_no') }),
+      body: JSON.stringify({ full_name: fd.get('full_name'), stage: fd.get('stage'), tab_no: fd.get('tab_no'), mark: fd.get('mark') }),
     });
     const data = await res.json();
     if (!data.ok) { alert(data.message || 'Не удалось добавить сотрудника'); return; }
@@ -887,8 +890,11 @@ async function renderRosterTab(stages) {
     btn.addEventListener('click', async () => {
       const v = prompt(`Артикул для «${btn.dataset.name}»:`, btn.dataset.art);
       if (v === null) return;
+      const m = prompt('Метка (буква или команда латиницей, например F или II). Необязательно — оставь пустым, чтобы убрать:', btn.dataset.mark);
+      const body = { tab_no: v };
+      if (m !== null) body.mark = m;
       const res = await fetch(`/api/admin/employees/${btn.dataset.editArt}`, {
-        method: 'PUT', headers: authHeaders(), body: JSON.stringify({ tab_no: v }),
+        method: 'PUT', headers: authHeaders(), body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!data.ok) { alert(data.message || 'Не удалось сохранить'); return; }

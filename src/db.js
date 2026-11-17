@@ -276,6 +276,13 @@ addColumn('nomenclature', 'deleted', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('employees', 'tab_no', 'TEXT');    // табельный номер из 1С
 addColumn('employees', 'mark', 'TEXT');      // метка/бригада (буква оправщика, команда глазуровщиков и т.п.)
 
+// Метки приводим к латинице: команды I–IV, буквы оправщиков (кириллические М/Х -> латинские M/X)
+for (const [from, to] of [['I-команда', 'I'], ['II-команда', 'II'], ['III-команда', 'III'], ['IV-команда', 'IV']]) {
+  db.prepare('UPDATE employees SET mark = ? WHERE mark = ?').run(to, from);
+}
+db.prepare("UPDATE employees SET mark = 'M' WHERE mark = 'М' AND stage = 'fettling'").run();
+db.prepare("UPDATE employees SET mark = 'X' WHERE mark = 'Х' AND stage = 'fettling'").run();
+
 db.exec('CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT)');
 
 

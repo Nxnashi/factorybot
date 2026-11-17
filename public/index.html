@@ -348,6 +348,7 @@
   .info-modal p { margin: 0 0 16px; font-size: 14px; line-height: 1.5; color: var(--text); }
   .info-modal button { width: 100%; padding: 12px; border: none; border-radius: 10px; background: var(--accent); color: var(--accent-text); font-weight: 700; font-size: 15px; }
   .art-col { display: inline-block; min-width: 46px; font-family: monospace; font-weight: 700; color: var(--hint); }
+  .mark-col { font-family: monospace; font-weight: 800; font-size: 13px; padding: 2px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); color: var(--accent); }
   .emp-btn { display: flex; align-items: center; gap: 10px; text-align: left; }
   .roster-check-item { display: flex; align-items: center; gap: 10px; }
   .stepper { display: flex; align-items: center; gap: 6px; }
@@ -542,7 +543,8 @@ async function renderOpenShiftScreen(me, stage) {
           <label class="roster-check-item">
             <input type="checkbox" value="${e.id}">
             <span class="art-col">${esc(e.tab_no || '—')}</span>
-            <span>${esc(e.full_name)}</span>
+            <span style="flex:1;">${esc(e.full_name)}</span>
+            ${e.mark ? `<span class="mark-col">${esc(e.mark)}</span>` : ''}
           </label>
         `).join('')}
       </div>
@@ -604,7 +606,7 @@ function renderEmployeePicker(me, stage, shift, employees) {
     <main>
       <div class="picker-hint">Смена открыта. Выбери сотрудника, чтобы внести его выработку.</div>
       ${employees.map(e => `
-        <button class="stage-pick-btn emp-btn" data-emp-id="${e.id}" data-emp-name="${esc(e.full_name)}"><span class="art-col">${esc(e.tab_no || '—')}</span><span>${esc(e.full_name)}</span></button>
+        <button class="stage-pick-btn emp-btn" data-emp-id="${e.id}" data-emp-name="${esc(e.full_name)}"><span class="art-col">${esc(e.tab_no || '—')}</span><span style="flex:1;">${esc(e.full_name)}</span>${e.mark ? `<span class="mark-col">${esc(e.mark)}</span>` : ''}</button>
       `).join('')}
       <div class="today-log" id="todayLog"></div>
     </main>
