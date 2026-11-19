@@ -15,6 +15,13 @@ function parseStages(stageField) {
   return String(stageField).split(',').map(s => s.trim()).filter(Boolean);
 }
 
+// Вносить можно за сегодня и за вчера (закрыть вчерашний день утром)
+function dateAllowed(date) {
+  const t = todayLocal();
+  const y = new Date(t + 'T00:00:00Z'); y.setUTCDate(y.getUTCDate() - 1);
+  return date === t || date === y.toISOString().slice(0, 10);
+}
+
 function isDayClosed(date) {
   return !!db.prepare('SELECT 1 FROM closed_days WHERE entry_date = ?').get(date);
 }
@@ -65,6 +72,7 @@ router.post('/mixing-batch/start', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) return res.status(404).json({ error: 'not_registered' });
   if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
+  if (!dateAllowed(entry_date)) return res.status(400).json({ error: 'date_not_allowed' });
   if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
 
   let batch = db.prepare(`
@@ -237,6 +245,7 @@ router.post('/shift/open', (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) return res.status(404).json({ error: 'not_registered' });
   if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
+  if (!dateAllowed(entry_date)) return res.status(400).json({ error: 'date_not_allowed' });
   if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
 
   const existingOpen = db.prepare(`
@@ -341,6 +350,7 @@ router.post('/submit', (req, res) => {
 
   const user = db.prepare('SELECT * FROM users WHERE telegram_id = ?').get(telegram_id);
   if (!user) return res.status(404).json({ error: 'not_registered' });
+  if (!dateAllowed(entry_date)) return res.status(400).json({ error: 'date_not_allowed' });
   if (isDayClosed(entry_date)) return res.status(403).json({ error: 'day_closed' });
   if (!parseStages(user.stage).includes(stage)) return res.status(403).json({ error: 'stage_not_allowed' });
 
@@ -423,7 +433,7 @@ router.delete('/entries/:id', (req, res) => {
 
   if (!entry) return res.status(404).json({ error: 'not_found' });
   if (entry.telegram_id !== String(telegram_id)) return res.status(403).json({ error: 'not_yours' });
-  if (entry.entry_date !== todayLocal()) return res.status(403).json({ error: 'not_today' });
+  if (!dateAllowed(entry.entry_date)) return res.status(403).json({ error: 'not_today' });
   if (isDayClosed(entry.entry_date)) return res.status(403).json({ error: 'day_closed' });
   if (isMaterial && entry.batch_id) {
     const b = db.prepare('SELECT status FROM mixing_batches WHERE id = ?').get(entry.batch_id);
@@ -440,7 +450,7 @@ router.delete('/entries/:id', (req, res) => {
 
 // Внесено сегодня этим пользователем (документы + расход сырья)
 router.get('/today/:telegramId', (req, res) => {
-  const today = todayLocal();
+  const today = dateAllowed(req.query.date) ? req.query.date : todayLocal();
 
   const rows = db.prepare(`
     SELECT e.*, n.name AS nomenclature_name

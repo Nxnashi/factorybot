@@ -247,6 +247,10 @@
   }
   .submit-btn:disabled { opacity: 0.5; }
 
+  .workdate-bar { display:flex; align-items:center; gap:8px; padding:10px 12px; margin:0 0 12px; border-radius:12px; background:var(--card, #fff); border:1px solid var(--line); font-size:14px; }
+  .workdate-bar.past { background:#fff4e0; border-color:#e0a84a; }
+  .workdate-bar button { padding:7px 12px; border-radius:999px; border:1px solid var(--line); background:transparent; font-size:14px; color:inherit; }
+  .workdate-bar button.on { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:700; }
   .today-log {
     margin-top: 22px;
   }
@@ -402,12 +406,43 @@ new MutationObserver(() => attachDateHints(document.body)).observe(document.body
 attachDateHints(document.body);
 
 const API = '';
+// Дата, за которую вносим данные: сегодня или вчера (переключатель на экране выбора этапа)
+let workDate = null;
+function getWorkDate() { return workDate || todayLocal(); }
+function yesterdayLocal() { const d = new Date(todayLocal() + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); }
+function fmtDay(d) { return d.slice(8, 10) + '.' + d.slice(5, 7); }
+function dateBanner() {
+  const wd = getWorkDate();
+  const isPast = wd !== todayLocal();
+  return `<div class="workdate-bar ${isPast ? 'past' : ''}" data-workdate>
+    <span>Вносим за:</span>
+    <button type="button" data-wd="${todayLocal()}" class="${!isPast ? 'on' : ''}">Сегодня</button>
+    <button type="button" data-wd="${yesterdayLocal()}" class="${isPast ? 'on' : ''}">Вчера · ${fmtDay(yesterdayLocal())}</button>
+  </div>`;
+}
+let dateEditable = true;
+function paintDateBanner() {
+  const main = app.querySelector('main');
+  if (!main || main.querySelector('[data-workdate]')) return;
+  main.insertAdjacentHTML('afterbegin', dateBanner());
+  const bar = main.querySelector('[data-workdate]');
+  if (!dateEditable) { bar.querySelectorAll('button').forEach(b => { b.disabled = true; b.style.opacity = b.classList.contains('on') ? '1' : '.35'; }); return; }
+  bindDateBanner(() => { if (currentStage && currentMe) openStage(currentMe, currentStage); else if (currentMe) renderStagePicker(currentMe); });
+}
+function bindDateBanner(rerender) {
+  document.querySelectorAll('[data-workdate] [data-wd]').forEach(b => b.addEventListener('click', () => {
+    if (workDate === b.dataset.wd || (!workDate && b.dataset.wd === todayLocal())) return;
+    workDate = b.dataset.wd === todayLocal() ? null : b.dataset.wd;
+    rerender();
+  }));
+}
 // Дата/время по Ташкенту (а не по UTC телефона/сервера)
 function todayLocal() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tashkent' }).format(new Date());
 }
 function esc(v) { return String(v == null ? '' : v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 const app = document.getElementById('app');
+new MutationObserver(() => paintDateBanner()).observe(app, { childList: true });
 const toastEl = document.getElementById('toast');
 
 function showToast(msg) {
@@ -478,6 +513,7 @@ function openStage(me, stage) {
 }
 
 function renderStagePicker(me) {
+  dateEditable = true; currentStage = null;
   app.innerHTML = `
     <header>
       <div class="eyebrow">Учёт производства</div>
@@ -498,7 +534,8 @@ function renderStagePicker(me) {
 
 // --- Смена старшего (для ROSTER_STAGES): проверяем статус, ведём либо на открытие, либо на список сотрудников ---
 async function renderShiftGate(me, stage) {
-  const today = todayLocal();
+  dateEditable = true;
+  const today = getWorkDate();
   app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
   const res = await fetch(`${API}/api/shift-status?telegram_id=${me.telegram_id}&stage=${stage.code}&entry_date=${today}`);
   const data = await res.json();
@@ -511,6 +548,7 @@ async function renderShiftGate(me, stage) {
 }
 
 async function renderOpenShiftScreen(me, stage) {
+  dateEditable = true;
   const roster = await (await fetch(`${API}/api/roster?stage=${stage.code}`)).json();
   const switchLink = me.stages.length > 1
     ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
@@ -564,7 +602,7 @@ async function renderOpenShiftScreen(me, stage) {
     if (!confirm(`Открыть смену на этапе «${stage.title}»?\n\nСостав: ${names}\n\nПосле открытия состав сменить нельзя — только закрыть смену и открыть новую.`)) {
       return;
     }
-    const today = todayLocal();
+    const today = getWorkDate();
     try {
       const res = await fetch(`${API}/api/shift/open`, {
         method: 'POST',
@@ -593,6 +631,7 @@ async function renderOpenShiftScreen(me, stage) {
 }
 
 function renderEmployeePicker(me, stage, shift, employees) {
+  dateEditable = true;
   const switchLink = me.stages.length > 1
     ? `<button class="switch-stage-btn" id="switchStageBtn">Сменить этап ↺</button>`
     : '';
@@ -659,8 +698,9 @@ function renderEmployeePicker(me, stage, shift, employees) {
 
 // Экран замесов: барабаны, замесы за сегодня, кнопка "новый замес" (замесов в день может быть много)
 async function renderDrumPicker(me, stage) {
+  dateEditable = true;
   if (stage.is_roster_stage && !mixEmp) { renderShiftGate(me, stage); return; }
-  const today = todayLocal();
+  const today = getWorkDate();
   app.innerHTML = `<div class="state-screen">Загрузка…</div>`;
   const batches = await (await fetch(`${API}/api/mixing-batch/today?stage=${stage.code}&entry_date=${today}`)).json();
   const switchLink = stage.is_roster_stage
@@ -708,7 +748,7 @@ async function startBatch(me, stage, drumNumber) {
     const res = await fetch(`${API}/api/mixing-batch/start`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: todayLocal(), stage: stage.code, drum_number: drumNumber, employee_id: mixEmp ? mixEmp.id : undefined }),
+      body: JSON.stringify({ telegram_id: me.telegram_id, entry_date: getWorkDate(), stage: stage.code, drum_number: drumNumber, employee_id: mixEmp ? mixEmp.id : undefined }),
     });
     const data = await res.json();
     if (data.error === 'day_closed') { showToast('Этот день уже закрыт. Обратись к администратору.'); return; }
@@ -728,6 +768,7 @@ async function refreshBatch(me, stage) {
 
 // Статичный список сырья как в документе 1С: "артикул - название"
 async function renderMaterialsForm(me, stage, batch, alreadyAdded) {
+  dateEditable = false;
   currentBatch = batch;
   const materials = await (await fetch(`${API}/api/materials?stage=${stage.code}`)).json();
 
@@ -816,6 +857,7 @@ async function addMaterialsToBatch(me, stage) {
 }
 
 function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
+  dateEditable = false;
   if (alreadyAdded.length === 0) {
     showToast('Сначала добавь сырьё в замес');
     return;
@@ -886,7 +928,8 @@ function renderBatchOutputForm(me, stage, batch, alreadyAdded) {
 let lastHeaderValue = {};
 
 function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
-  const today = todayLocal();
+  dateEditable = false;
+  const today = getWorkDate();
   const grades = stage.grade_options;
   const fields = stage.fields || [];
   const cols = grades ? grades.length : fields.length;
@@ -944,7 +987,7 @@ function renderForm(me, stage, nomenclature, employeeId, employeeName, shift) {
     <main>
       <div class="date-row">
         <label>Дата смены</label>
-        <input type="date" id="entryDate" value="${today}" max="${today}">
+        <input type="date" id="entryDate" value="${today}" min="${today}" max="${today}" readonly style="${today !== todayLocal() ? 'background:#fff4e0;font-weight:700;' : ''}">
       </div>
       ${headerHtml}
       ${stage.hint ? `<div class="picker-hint">${esc(stage.hint)}</div>` : ''}
@@ -1068,13 +1111,13 @@ async function submit(me, stage, employeeId, employeeName, shift) {
 }
 
 async function loadToday(telegramId) {
-  const res = await fetch(`${API}/api/today/${telegramId}`);
+  const res = await fetch(`${API}/api/today/${telegramId}?date=${getWorkDate()}`);
   const rows = await res.json();
   const el = document.getElementById('todayLog');
   if (!el) return;
   if (rows.length === 0) { el.innerHTML = ''; return; }
   el.innerHTML = `
-    <h2>Внесено сегодня</h2>
+    <h2>Внесено ${getWorkDate() === todayLocal() ? 'сегодня' : 'за ' + fmtDay(getWorkDate())}</h2>
     ${rows.map(r => `
       <div class="log-row" data-entry-id="${r.id}">
         <span>
